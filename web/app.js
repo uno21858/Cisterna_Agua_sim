@@ -1852,7 +1852,7 @@ function pintaLecturas() {
   }
   // Con consumo sale cloro y entra agua sin cloro: la meta (dosis entre volumen) ya no se alcanza.
   const conConsumo = (cfgActiva ?? cfgV).consumo_lpm > 0;
-  pon("l-meta", `${cf.toFixed(2)} <small>mg/L${conConsumo ? " sin consumo" : ""}</small>`);
+  pon("l-meta", `${cf.toFixed(2)} <small>mg/L</small>${conConsumo ? '<small class="bloque">si no hubiera consumo</small>' : ""}`);
   if (so) {
     Object.keys(so).slice(0, 3).forEach((n, k) => pon(`l-s${k}`, `${so[n].toFixed(2)} <small>mg/L</small>`));
   }

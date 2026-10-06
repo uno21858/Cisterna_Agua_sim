@@ -398,7 +398,7 @@ async function revision() {
     await page.mouse.up();
     const alt = await page.evaluate(() => [window.visor.cfg.z_bomba, document.getElementById("altura").min]);
     revisa("arrastrar la bomba abajo se detiene en el mínimo del slider", alt[0] === 0.08 && alt[1] === "8" && (await txt("o-altura")) === "8 cm", JSON.stringify(alt));
-    // Consumo y malla en la tabla de corridas; la meta dice "sin consumo".
+    // Consumo y malla en la tabla de corridas; la meta aclara que no cuenta el consumo.
     await page.selectOption("#malla", "0.15");
     await page.waitForTimeout(1500);
     await page.fill("#consumo", "20");
@@ -406,7 +406,7 @@ async function revision() {
     await page.waitForTimeout(1200);
     const fila = await page.evaluate(() => document.querySelector("#corridas tr").innerText);
     revisa("la fila anota nivel, consumo y malla", fila.includes("120 cm, 0 y luego 20 L/min") && fila.includes("15 cm"), fila.replace(/\s+/g, " "));
-    revisa("con consumo la meta dice sin consumo", (await txt("l-meta")).includes("sin consumo"));
+    revisa("con consumo la meta lo aclara", (await txt("l-meta")).includes("si no hubiera consumo"));
     revisa("sin errores de consola", !errores.length, errores.join(" | "));
     await ctx.close();
   }
