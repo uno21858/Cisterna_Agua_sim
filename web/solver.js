@@ -158,8 +158,11 @@ export function validar(cfgParcial = {}) {
     if (c[nombre] === undefined) continue;
     if (!(c[nombre] > 0)) errores.push(`${nombre} debe ser > 0`);
   }
-  if (c.k_salida < 0 || c.precalentar_s < 0 || c.bomba_min < 0 || c.c_nu < 0 || c.cloralex_mg_ml <= 0) {
-    errores.push("k_salida, precalentar_s, bomba_min y c_nu deben ser >= 0; cloralex_mg_ml > 0");
+  // en forma negada para que NaN también falle
+  const noNeg = (v) => v === undefined || v >= 0;
+  if (!(noNeg(c.k_salida) && noNeg(c.precalentar_s) && noNeg(c.bomba_min) && c.c_nu >= 0 && c.cs >= 0 &&
+        c.cloralex_mg_ml > 0 && c.sc_t > 0)) {
+    errores.push("k_salida, precalentar_s, bomba_min, c_nu y cs deben ser >= 0; cloralex_mg_ml y sc_t > 0");
   }
   if (!(c.angulo_tubo >= 5 && c.angulo_tubo <= 90)) errores.push("angulo_tubo debe estar entre 5 y 90 grados");
   if (c.elevacion != null && !(c.elevacion >= -90 && c.elevacion <= 90)) {
@@ -174,20 +177,24 @@ export function validar(cfgParcial = {}) {
     if (!esPunto(c[nombre], 3)) errores.push(`${nombre} debe ser [x, y, z]`);
   }
   if (c.pos_bomba != null && !esPunto(c.pos_bomba, 3)) errores.push("pos_bomba debe ser null o [x, y, z]");
-  if (c.consumo_lpm < 0 || c.c_llenado_mg_l < 0) errores.push("consumo_lpm y c_llenado_mg_l deben ser >= 0");
+  if (!(c.consumo_lpm >= 0 && c.c_llenado_mg_l >= 0)) errores.push("consumo_lpm y c_llenado_mg_l deben ser >= 0");
   if (!(c.llenado_mm > 0)) errores.push("llenado_mm debe ser > 0");
   if (errores.length) throw new Error(errores.join("; "));
 
-  if (Math.min(c.largo, c.ancho, c.nivel) / c.dx < 4) {
-    errores.push("dx muy grande: se necesitan al menos 4 celdas por eje");
+  // en z la malla usa max(4, ...) por sí sola, así que la regla solo aplica en planta
+  if (Math.min(c.largo, c.ancho) / c.dx < 4) {
+    errores.push("dx muy grande: se necesitan al menos 4 celdas a lo largo y a lo ancho");
   }
   const zb = posBomba(c)[2];
-  if (c.nivel < zb + 0.10) {
+  if (c.nivel < zb + 0.10 - 1e-9) {
     errores.push(`nivel ${fmt(c.nivel)} m deja la bomba (a ${fmt(zb)} m) casi en seco; ` +
       "en la vida real el INA219 la apagaría");
   }
   if (c.z_tapa <= c.nivel) errores.push("z_tapa debe estar arriba del nivel del agua");
-  const puntos = { bomba: posBomba(c), "sonda ORP": puntoTubo(c, c.z_orp), pozo: c.pozo, dosis: puntoDosis(c) };
+  const puntos = {
+    bomba: posBomba(c), "sonda ORP": puntoTubo(c, c.z_orp), pozo: c.pozo, dosis: puntoDosis(c),
+    "boca (sonda de superficie)": [c.boca[0], c.boca[1], c.nivel - 0.10],
+  };
   if (c.consumo_lpm > 0) puntos.llenado = fuenteLlenado(c);
   for (const [nombre, [x, y, z]] of Object.entries(puntos)) {
     if (!(x > 0 && x < c.largo && y > 0 && y < c.ancho && z > 0 && z < c.nivel)) {
@@ -429,8 +436,6 @@ export class Cisterna {
     this.fU = fuerza(nU, [nx + 1, ny, nz], OFF_U, 0);
     this.fV = fuerza(nV, [nx, ny + 1, nz], OFF_V, 1);
     this.fW = fuerza(nW, [nx, ny, nz + 1], OFF_W, 2);
-    // Turbulencia que la malla no resuelve: nu = C * sqrt(M) (ver config.c_nu).
-    this.nuFondo = cfg.c_nu * Math.sqrt(this.bomba.m_m4s2);
 
     // Consumo de la casa: sumidero en la rejilla del pozo, fuente y chorro en el llenado.
     this.q = cfg.consumo_lpm / 60000;
@@ -470,6 +475,10 @@ export class Cisterna {
       this.mLlenado = 0;
     }
     this.fLlenado = this.q > 0 ? this._fWoff : null; // aceleración del chorro del llenado en las caras w
+    // Turbulencia que la malla no resuelve: nu = C * sqrt(M) (ver config.c_nu), con M la suma de los
+    // chorros que andan: la bomba y, con consumo, el del llenado (si no, apagar la bomba "mezclaría mejor").
+    this.nuFondo = cfg.c_nu * Math.sqrt(this.bomba.m_m4s2 + this.mLlenado);
+    this.nuFondoSinBomba = cfg.c_nu * Math.sqrt(this.mLlenado);
 
     // Autovalores del laplaciano discreto con Neumann (base de la DCT-II).
     this._lam = new Float64Array(nc);
@@ -831,7 +840,7 @@ export class Cisterna {
   _pasoFlujo(dt, encendida) {
     const { nx, ny, nz } = this;
     this._centros();
-    this._nuTurbulenta(encendida ? this.nuFondo : 0.0);
+    this._nuTurbulenta(encendida ? this.nuFondo : this.nuFondoSinBomba);
     this._advecta(this._un, this.u, nx + 1, ny, nz, OFF_U, 0, dt);
     this._advecta(this._vn, this.v, nx, ny + 1, nz, OFF_V, 1, dt);
     this._advecta(this._wn, this.w, nx, ny, nz + 1, OFF_W, 2, dt);
@@ -1016,7 +1025,9 @@ export class Cisterna {
     const bomba = opts === undefined || opts.bomba === undefined ? true : !!opts.bomba;
     this._pasoFlujo(dt, bomba);
     if (cloro) {
-      const n = Math.max(1, Math.ceil(dt / this.dtCloro()));
+      const dtc = this.dtCloro();
+      if (!(dtc > 0 && Number.isFinite(dtc))) throw new Error(`paso del cloro inválido (${dtc}): revisa sc_t y c_nu`);
+      const n = Math.max(1, Math.ceil(dt / dtc));
       const nu = this.nu, dif = this._dif, sc = this.cfg.sc_t;
       for (let m = 0; m < nu.length; m++) dif[m] = nu[m] / sc;
       for (let q = 0; q < n; q++) this._pasoCloro(dt / n);
@@ -1051,7 +1062,8 @@ export class Cisterna {
     return 0.5 * (s / uc.length);
   }
 
-  // cov, cmin y cmax relativos a cFinal (en mg/L si todavía no hay dosis); cmedia en mg/L.
+  // cov = desviación / media actual (con consumo la media baja); cmin y cmax relativos a cFinal
+  // (en mg/L si todavía no hay dosis); cmedia en mg/L.
   stats() {
     const c = this.c, n = c.length, cf = this.cFinal;
     let sumaC = 0, suma = 0, cmin = Infinity, cmax = -Infinity;
@@ -1074,7 +1086,7 @@ export class Cisterna {
       if (q > v2max) v2max = q;
     }
     return {
-      cov: Math.sqrt(var2 / n), cmin, cmax,
+      cov: media > 0 ? Math.sqrt(var2 / n) / media : 0, cmin, cmax,
       masa_mg: sumaC * this.volCelda * 1000.0,
       ek: 0.5 * (ek / n), vmax: Math.sqrt(v2max),
       cmedia: sumaC / n,

@@ -74,6 +74,9 @@ Proyección: resolver lap(p) = (div(u*) - s)/dt. Chorro del llenado: fuerza haci
 M_ll = Q²/A(llenado_mm), repartida igual que la fuente. Cloro, forma conservativa:
 dc/dt = -div(F) + s⁺·c_llenado_mg_l + s⁻·c (s⁻ es negativo: el sumidero saca cloro a la
 concentración local). Masa: d(masa)/dt = Q·c_in - Q·c(pozo) (verificar en test).
+Viscosidad de fondo con consumo: c_nu·sqrt((bomba encendida ? M : 0) + M_ll), porque el chorro
+del llenado tampoco se resuelve; sin esto, apagar la bomba "mezclaba mejor" (revisión del 6 oct).
+Con consumo, stats().cov es desviación / media actual (sin consumo es igual a std(c/cFinal)).
 
 ## API de solver.js
 

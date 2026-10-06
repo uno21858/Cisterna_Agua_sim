@@ -93,7 +93,9 @@ def test_chorro_configurable():
 @pytest.mark.parametrize("kw", [
     {"nivel": 0.55},  # bomba casi en seco
     {"lugar_dosis": "tinaco"},
-    {"dx": 0.5},
+    {"dx": 0.7},
+    {"sc_t": 0},
+    {"boca": (3.45, 1.0)},
     {"angulo_tubo": 0},
     {"boca": (5.0, 1.0)},
     {"cfl": 0.9},
@@ -129,3 +131,8 @@ def test_precision_simple_da_lo_mismo_y_no_sube_a_doble():
     escala = float(np.abs(sims[False].c).max())
     assert float(np.abs(sims[True].c - sims[False].c).max()) < 1e-4 * escala
     assert sims[True].masa_cloro_mg() == pytest.approx(7500.0, rel=1e-5)
+
+
+def test_bomba_en_el_tope_y_nivel_bajo_con_malla_gruesa_son_validos():
+    Config(z_bomba=1.10).validar()  # 1.10 + 0.10 > 1.20 en punto flotante
+    Config(dx=0.2, nivel=0.65, z_bomba=0.40, pozo=(0.9, 1.0, 0.30)).validar()

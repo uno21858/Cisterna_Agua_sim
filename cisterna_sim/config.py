@@ -139,9 +139,10 @@ class Config:
                        "minutos", "dosis_ml"):
             if not getattr(self, nombre) > 0:
                 errores.append(f"{nombre} debe ser > 0")
-        if (self.k_salida < 0 or self.precalentar_s < 0 or self.bomba_min < 0 or self.c_nu < 0
-                or self.cloralex_mg_ml <= 0):
-            errores.append("k_salida, precalentar_s, bomba_min y c_nu deben ser >= 0; cloralex_mg_ml > 0")
+        # en forma negada para que NaN también falle
+        if not (self.k_salida >= 0 and self.precalentar_s >= 0 and self.bomba_min >= 0 and self.c_nu >= 0
+                and self.cs >= 0 and self.cloralex_mg_ml > 0 and self.sc_t > 0):
+            errores.append("k_salida, precalentar_s, bomba_min, c_nu y cs deben ser >= 0; cloralex_mg_ml y sc_t > 0")
         if not 5 <= self.angulo_tubo <= 90:
             errores.append("angulo_tubo debe estar entre 5 y 90 grados")
         if self.elevacion is not None and not -90 <= self.elevacion <= 90:
@@ -153,10 +154,11 @@ class Config:
         if errores:
             raise ValueError("; ".join(errores))
 
-        if min(self.largo, self.ancho, self.nivel) / self.dx < 4:
-            errores.append("dx muy grande: se necesitan al menos 4 celdas por eje")
+        # en z la malla usa max(4, ...) por sí sola, así que la regla solo aplica en planta
+        if min(self.largo, self.ancho) / self.dx < 4:
+            errores.append("dx muy grande: se necesitan al menos 4 celdas a lo largo y a lo ancho")
         zb = self.pos_bomba_xyz()[2]
-        if self.nivel < zb + 0.10:
+        if self.nivel < zb + 0.10 - 1e-9:
             errores.append(
                 f"nivel {self.nivel:.2f} m deja la bomba (a {zb:.2f} m) casi en seco; "
                 "en la vida real el INA219 la apagaría"
@@ -164,7 +166,8 @@ class Config:
         if self.z_tapa <= self.nivel:
             errores.append("z_tapa debe estar arriba del nivel del agua")
         puntos = {"bomba": self.pos_bomba_xyz(), "sonda ORP": self.punto_tubo(self.z_orp),
-                  "pozo": self.pozo, "dosis": self.punto_dosis()}
+                  "pozo": self.pozo, "dosis": self.punto_dosis(),
+                  "boca (sonda de superficie)": (self.boca[0], self.boca[1], self.nivel - 0.10)}
         for nombre, (x, y, z) in puntos.items():
             if not (0 < x < self.largo and 0 < y < self.ancho and 0 < z < self.nivel):
                 errores.append(f"{nombre} ({x:.2f}, {y:.2f}, {z:.2f}) queda fuera del agua o de la cisterna")

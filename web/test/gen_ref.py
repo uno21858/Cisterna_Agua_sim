@@ -38,7 +38,7 @@ CASOS = {
 INVALIDOS = [
     {"nivel": 0.55},
     {"lugar_dosis": "tinaco"},
-    {"dx": 0.5},
+    {"dx": 0.7},
     {"angulo_tubo": 0},
     {"boca": [5.0, 1.0]},
     {"cfl": 0.9},

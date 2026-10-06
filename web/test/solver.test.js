@@ -146,8 +146,9 @@ test("el chorro del llenado empuja hacia abajo con M = Q^2 / A", () => {
 
 test("validar rechaza los mismos casos que tests/test_solver.py", () => {
   const invalidos = [
-    { nivel: 0.55 }, { lugar_dosis: "tinaco" }, { dx: 0.5 }, { angulo_tubo: 0 }, { boca: [5.0, 1.0] },
+    { nivel: 0.55 }, { lugar_dosis: "tinaco" }, { dx: 0.7 }, { angulo_tubo: 0 }, { boca: [5.0, 1.0] },
     { cfl: 0.9 }, { c_nu: -0.01 }, { dosis_ml: 0 }, { elevacion: 120 }, { pos_bomba: [1.0, 1.0, 1.15] },
+    { sc_t: 0 }, { boca: [3.45, 1.0] }, { c_nu: NaN }, { consumo_lpm: NaN }, { cs: NaN },
   ];
   for (const kw of invalidos) assert.throws(() => validar(kw), Error, JSON.stringify(kw));
   assert.throws(() => new Cisterna({ nivel: 0.55 }), /casi en seco/);
@@ -284,4 +285,32 @@ test("copiaEstado conserva el agua al cambiar la bomba de lugar", () => {
   assert.equal(b.t, a.t);
   assert.equal(b.cFinal, a.cFinal);
   assert.equal(new Cisterna({ dx: 0.25 }).copiaEstado(a), false);
+});
+
+
+test("bomba en el tope y nivel bajo con malla gruesa son válidos", () => {
+  validar({ z_bomba: 1.10 });
+  validar({ dx: 0.2, nivel: 0.65, z_bomba: 0.40, pozo: [0.9, 1.0, 0.30] });
+});
+
+test("con consumo alto, prender la bomba no mezcla más lento que apagada", () => {
+  const cov = {};
+  for (const bomba of [true, false]) {
+    const sim = new Cisterna({ dx: 0.2, consumo_lpm: 40 });
+    sim.dosificaCfg();
+    while (sim.t < 20 * 60) sim.avanza(Math.min(sim.dtFlujo(), 20 * 60 - sim.t), { bomba });
+    cov[bomba] = sim.stats().cov;
+  }
+  assert.ok(cov[true] <= cov[false], `CoV a 20 min: bomba ${cov[true].toFixed(3)}, sin bomba ${cov[false].toFixed(3)}`);
+});
+
+test("sin consumo, el CoV de stats es std(c / cFinal) como en Python", () => {
+  const sim = new Cisterna({ dx: 0.2 });
+  sim.dosificaCfg();
+  for (let k = 0; k < 30; k++) sim.avanza(0.5);
+  const n = sim.c.length;
+  let s = 0, s2 = 0;
+  for (let m = 0; m < n; m++) { const r = sim.c[m] / sim.cFinal; s += r; s2 += r * r; }
+  const std = Math.sqrt(s2 / n - (s / n) ** 2);
+  assert.ok(Math.abs(sim.stats().cov - std) < 1e-9 * std);
 });
