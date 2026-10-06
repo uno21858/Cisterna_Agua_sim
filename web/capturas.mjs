@@ -4,6 +4,7 @@
 //   node web/capturas.mjs controles     arrastres, sliders, editar cisterna, corte, velocidad, pausa, reiniciar
 //   node web/capturas.mjs rotulos       busca rótulos encimados en varias configuraciones y anchos
 //   node web/capturas.mjs rendimiento   cuadros por segundo, costo por cuadro y velocidad de la simulación
+//   node web/capturas.mjs contrato      reglas del artifact: esqueleto, temas, foco, movimiento reducido, 400 px
 //   node web/capturas.mjs todo
 // Variables: URL (dev.html por omisión), PLAYWRIGHT (ruta del paquete).
 import { createRequire } from "node:module";
@@ -383,6 +384,67 @@ async function rendimiento() {
   }
 }
 
+// ---------- contrato del artifact ----------
+
+async function contrato() {
+  const { readFileSync } = await import("node:fs");
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const html = readFileSync(join(dir, "index.html"), "utf8");
+  const app = readFileSync(join(dir, "app.js"), "utf8");
+  const todo = html + app + readFileSync(join(dir, "worker.js"), "utf8");
+  const revisa = (nombre, ok, extra = "") => {
+    if (!ok) fallas++;
+    console.log(`${ok ? "bien" : "MAL "} ${nombre} ${extra}`);
+  };
+  revisa("empieza con <title> de 2 a 4 palabras", /^<title>(\S+\s){1,3}\S+<\/title>/.test(html));
+  revisa("sin doctype, html, head ni body", !/<!doctype|<(html|head|body)[\s>]/i.test(html));
+  revisa("modo oscuro guardado y repetido", html.includes('@media (prefers-color-scheme: dark)') && html.includes(':root:not([data-theme="light"])') && html.includes(':root[data-theme="dark"]'));
+  revisa("body con fondo de token", /body\s*\{[^}]*background:\s*var\(--/.test(html));
+  revisa("sin scripts externos", !/<script[^>]+src="(https?:)?\/\//.test(html));
+  revisa("sin alert, confirm ni prompt", !/\b(alert|confirm|prompt)\(/.test(todo));
+  revisa("Worker desde archivo propio como módulo", /new Worker\(new URL\("\.\/worker\.js", import\.meta\.url\), \{ type: "module" \}\)/.test(app));
+  revisa("sin rayas largas ni medias", !/[\u2013\u2014]/.test(todo));
+  revisa("movimiento reducido en CSS y JS", html.includes("prefers-reduced-motion") && app.includes("prefers-reduced-motion"));
+  revisa("foco visible", html.includes(":focus-visible"));
+
+  for (const tema of ["light", "dark"]) {
+    const { ctx, page, errores } = await abre({ w: 400, h: 860, dpr: 2, movil: true, tema });
+    await page.waitForTimeout(500);
+    const r = await page.evaluate(() => ({ ancho: document.documentElement.scrollWidth, ventana: innerWidth, fondo: getComputedStyle(document.body).backgroundColor }));
+    revisa(`400 px sin scroll horizontal (${tema})`, r.ancho <= r.ventana, `${r.ancho} de ${r.ventana}`);
+    // data-theme manda sobre el sistema
+    const contrario = tema === "light" ? "dark" : "light";
+    const fondo2 = await page.evaluate(async (t) => {
+      document.documentElement.dataset.theme = t;
+      await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
+      return getComputedStyle(document.body).backgroundColor;
+    }, contrario);
+    revisa(`data-theme="${contrario}" cambia el tema sobre el sistema ${tema}`, fondo2 !== r.fondo, `${r.fondo} a ${fondo2}`);
+    revisa(`sin errores (${tema})`, !errores.length, errores.join(" | "));
+    await ctx.close();
+  }
+  {
+    const { ctx, page } = await abre({ w: 1280, h: 800 });
+    await page.keyboard.press("Tab");
+    const f = await page.evaluate(() => {
+      const el = document.activeElement, cs = getComputedStyle(el);
+      return { id: el.id, estilo: cs.outlineStyle, ancho: cs.outlineWidth };
+    });
+    revisa("el primer Tab llega a un control con contorno visible", f.id && f.estilo !== "none" && parseFloat(f.ancho) >= 2, JSON.stringify(f));
+    await ctx.close();
+  }
+  {
+    const ctx = await navegador.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
+    const page = await ctx.newPage();
+    await page.goto(base);
+    await page.waitForFunction(() => window.visor?.sim?.t > 1, null, { timeout: 60000 });
+    const capas = await page.evaluate(() => window.visor.est.capas);
+    revisa("con movimiento reducido: flechas en vez de partículas", !capas.part && capas.flechas, JSON.stringify(capas));
+    await ctx.close();
+  }
+}
+
+if (modo === "contrato" || modo === "todo") await contrato();
 if (modo === "capturas" || modo === "todo") await capturas();
 if (modo === "controles" || modo === "todo") {
   await controles({ w: 1280, h: 800 });
