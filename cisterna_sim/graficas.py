@@ -10,6 +10,8 @@ import numpy as np
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.colors import LinearSegmentedColormap
 
+from .solver import a_numpy
+
 # Paleta categórica validada (slots 1 a 3) y rampa secuencial azul.
 SERIES = ("#2a78d6", "#eb6834", "#1baf7a")
 TINTA = "#0b0b0b"
@@ -96,7 +98,7 @@ def graficar_flujo(sim, ruta):
     ax1.set_title("Corte vertical por el plano del chorro", loc="left")
     fig.colorbar(im, ax=ax1, label="velocidad (cm/s)", shrink=0.9, pad=0.01)
 
-    uc, vc, wc = sim.velocidad_centros()
+    uc, vc, wc = (a_numpy(q) for q in sim.velocidad_centros())
     k = sim.indice_z(cfg.pozo[2])
     x = (np.arange(sim.nx) + 0.5) * sim.dx
     y = (np.arange(sim.ny) + 0.5) * sim.dy

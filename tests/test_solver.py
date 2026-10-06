@@ -114,3 +114,18 @@ def test_geometria_del_mastil():
     horizontal = math.hypot(x - bx, y - by)
     assert horizontal == pytest.approx((cfg.z_tapa - cfg.z_bomba) / math.tan(math.radians(cfg.angulo_tubo)))
     assert np.linalg.norm(cfg.dir_chorro()) == pytest.approx(1.0)
+
+
+def test_precision_simple_da_lo_mismo_y_no_sube_a_doble():
+    sims = {}
+    for f32 in (False, True):
+        sim = Cisterna(Config(dx=0.2), f32=f32)
+        sim.dosifica(7500.0, sim.cfg.punto_dosis())
+        for _ in range(40):
+            sim.avanza(0.5)
+        sims[f32] = sim
+    for campo in ("u", "v", "w", "c", "nu_c"):
+        assert getattr(sims[True], campo).dtype == np.float32, campo
+    escala = float(np.abs(sims[False].c).max())
+    assert float(np.abs(sims[True].c - sims[False].c).max()) < 1e-4 * escala
+    assert sims[True].masa_cloro_mg() == pytest.approx(7500.0, rel=1e-5)

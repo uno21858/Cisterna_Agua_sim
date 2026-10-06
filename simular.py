@@ -49,6 +49,8 @@ def _args():
     p.add_argument("--c-nu", type=float, default=d.c_nu, help="viscosidad turbulenta de fondo / sqrt(M)")
     p.add_argument("--salida", type=Path, default=Path("resultados"))
     p.add_argument("--sin-gif", action="store_true", help="no generar la animación")
+    p.add_argument("--gpu", action="store_true", help="correr en GPU con CuPy (pip install cupy-cuda13x)")
+    p.add_argument("--f32", action="store_true", help="precisión simple (mucho más rápida en GeForce)")
     a = p.parse_args()
     return a, Config(minutos=a.minutos, bomba_min=a.bomba_min, dx=a.dx, largo=a.largo, ancho=a.ancho,
                      nivel=a.nivel, q_max_lh=a.caudal_lh, h_max_m=a.hmax, salida_mm=a.salida_mm,
@@ -142,7 +144,7 @@ def main():
 
     print(f"Simulando {cfg.minutos:.0f} min (más {cfg.precalentar_s:.0f} s de precalentado)...")
     t0 = time.time()
-    sim, serie, cuadros = correr(cfg)
+    sim, serie, cuadros = correr(cfg, gpu=args.gpu, f32=args.f32)
     print(f"Listo en {time.time() - t0:.0f} s, {sim.pasos} pasos.")
 
     r = resumir(cfg, sim, serie)
