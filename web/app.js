@@ -181,7 +181,8 @@ function recibeMotor(m) {
     if (ev.tipo === "dosis") alDosificar(ev.t);
     else registra(ev);
   }
-  if (viejo) motor.manda({ tipo: "devuelve", set: viejo }, transferibles(viejo));
+  // Siempre se contesta: el motor no manda otra instantánea hasta saber que llegó esta.
+  motor.manda({ tipo: "devuelve", set: viejo }, transferibles(viejo));
   if (otraMalla) {
     for (const v of Object.values(vistas)) v.P = null;
     fondoSucio = true;
