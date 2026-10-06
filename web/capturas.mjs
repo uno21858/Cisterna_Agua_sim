@@ -1,7 +1,8 @@
 // Pruebas y capturas del visor con Playwright (Chromium sin GPU).
 // Uso: npx http-server web -p 8080 -c-1 (en otra terminal) y luego
 //   node web/capturas.mjs               capturas en web/test/capturas: escritorio y teléfono, claro y oscuro
-//   node web/capturas.mjs controles     arrastres, sliders, editar cisterna, corte, velocidad, pausa, reiniciar
+//   node web/capturas.mjs controles     arrastres, sliders, editar cisterna, corte, velocidad, pausa, reiniciar,
+//                                       y los casos de la revisión del visor (config rechazada, dosis, serie larga)
 //   node web/capturas.mjs rotulos       busca rótulos encimados en varias configuraciones y anchos
 //   node web/capturas.mjs rendimiento   cuadros por segundo, costo por cuadro y velocidad de la simulación
 //   node web/capturas.mjs contrato      reglas del artifact: esqueleto, temas, foco, movimiento reducido, 400 px
@@ -311,6 +312,135 @@ async function toqueYRespaldo() {
   }
 }
 
+// ---------- casos de la revisión del visor ----------
+
+// Guarda lo que el visor manda al motor (menos control y devoluciones) y el Worker para inyectarle mensajes.
+const espiaMotor = () => {
+  window.__msgs = [];
+  const pm = Worker.prototype.postMessage;
+  Worker.prototype.postMessage = function (m, t) {
+    if (m && m.tipo !== "devuelve" && m.tipo !== "control") window.__msgs.push(JSON.parse(JSON.stringify(m)));
+    return pm.call(this, m, t);
+  };
+  const W = window.Worker;
+  window.Worker = function (u, o) {
+    const w = new W(u, o);
+    window.__w = w;
+    return w;
+  };
+  window.Worker.prototype = W.prototype;
+};
+
+async function revision() {
+  let bien = 0, mal = 0;
+  const revisa = (nombre, cond, extra = "") => {
+    cond ? bien++ : mal++;
+    console.log(`${cond ? "bien" : "MAL "} ${nombre} ${extra}`);
+  };
+  const ultimaDosis = (page) => page.evaluate(() => window.__msgs.filter((m) => m.tipo === "dosis").at(-1)?.punto);
+  {
+    const { ctx, page, errores } = await abre({ w: 1280, h: 900, antes: espiaMotor });
+    const txt = (id) => page.textContent(`#${id}`);
+    await page.waitForFunction(() => document.getElementById("l-formula").textContent.includes("min"));
+    const formula0 = await txt("l-formula");
+    // Nivel a 55 cm con la bomba a 50: se rechaza y todo sigue con la config que corre.
+    await page.fill("#nivel", "55");
+    await page.waitForTimeout(800);
+    await page.click("#echar");
+    await page.waitForTimeout(300);
+    const pd = await ultimaDosis(page);
+    revisa("cambio rechazado: el control conserva el valor", (await txt("o-nivel")) === "55 cm" && (await txt("avisos")).includes("No se aplicó"));
+    revisa("cambio rechazado: volumen y fórmula de la config que corre",
+      (await txt("d-volumen")).startsWith("10.0") && (await txt("l-formula")) === formula0 && (await page.evaluate(() => window.visor.sim.H)) === 1.2,
+      `${await txt("d-volumen")}, ${await txt("l-formula")} (antes ${formula0})`);
+    revisa("cambio rechazado: la dosis sale a 10 cm bajo el nivel que corre", pd && Math.abs(pd[2] - 1.1) < 1e-6, JSON.stringify(pd));
+    await page.fill("#altura", "30");
+    await page.waitForTimeout(1500);
+    revisa("al bajar la bomba se aplica el nivel pendiente", (await page.evaluate(() => window.visor.sim.H)) === 0.55);
+    // Planta a una altura: no queda arriba del agua.
+    await page.click("label[for=planta-z]");
+    await page.fill("#nivel", "100");
+    await page.fill("#z-planta", "90");
+    await page.fill("#nivel", "60");
+    await page.waitForTimeout(300);
+    revisa("la planta a una altura baja con el nivel", (await txt("t-planta-sub")) === "a 55 cm del fondo" && (await page.evaluate(() => window.visor.est.zPlanta)) === 0.55, await txt("t-planta-sub"));
+    await page.click("label[for=planta-prom]");
+    // Dosis tocando la planta: sigue al nivel.
+    await page.fill("#nivel", "80");
+    await page.waitForTimeout(1500);
+    await page.click("label[for=lugar-clic]");
+    await page.evaluate(() => scrollTo(0, 0));
+    const caja = await page.locator("#c-planta").boundingBox();
+    await page.mouse.click(caja.x + caja.width * 0.7, caja.y + caja.height * 0.4);
+    await page.fill("#nivel", "120");
+    await page.waitForTimeout(1500);
+    await page.click("#echar");
+    await page.waitForTimeout(300);
+    const ld = await page.evaluate(() => window.visor.cfg.lugar_dosis);
+    const pd2 = await ultimaDosis(page);
+    revisa("el punto tocado sube con el nivel", Array.isArray(ld) && Math.abs(ld[2] - 1.1) < 1e-6 && Math.abs(pd2[2] - 1.1) < 1e-6, `${JSON.stringify(ld)} ${JSON.stringify(pd2)}`);
+    // Flecha del chorro casi de frente al corte.
+    await page.evaluate(() => window.visor.aplica({ pos_bomba: [1.7, 1.2, 0.5], azimut: 95, elevacion: -10, lugar_dosis: "llenado" }));
+    revisa("chorro casi de frente al corte: el pie lo dice", (await txt("pie-corte")).includes("de frente"));
+    await page.evaluate(() => window.visor.aplica({ azimut: 60, elevacion: 0 }));
+    revisa("chorro a 60°: sin nota de frente", !(await txt("pie-corte")).includes("de frente"));
+    // Bomba en el mástil: altura mínima igual al slider.
+    await page.click("#montar");
+    await page.click("#seguir");
+    await page.waitForTimeout(1200);
+    await page.locator("#c-corte").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(200);
+    const cc = await page.locator("#c-corte").boundingBox();
+    const m = (await page.evaluate(() => window.visor.manijas("corte"))).find((q) => q.id === "bomba-z");
+    await page.mouse.move(cc.x + m.x, cc.y + m.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(cc.x + m.x, cc.y + m.y + 25 * i);
+    await page.mouse.up();
+    const alt = await page.evaluate(() => [window.visor.cfg.z_bomba, document.getElementById("altura").min]);
+    revisa("arrastrar la bomba abajo se detiene en el mínimo del slider", alt[0] === 0.08 && alt[1] === "8" && (await txt("o-altura")) === "8 cm", JSON.stringify(alt));
+    // Consumo y malla en la tabla de corridas; la meta dice "sin consumo".
+    await page.selectOption("#malla", "0.15");
+    await page.waitForTimeout(1500);
+    await page.fill("#consumo", "20");
+    await page.dispatchEvent("#consumo", "change");
+    await page.waitForTimeout(1200);
+    const fila = await page.evaluate(() => document.querySelector("#corridas tr").innerText);
+    revisa("la fila anota nivel, consumo y malla", fila.includes("120 cm, 0 y luego 20 L/min") && fila.includes("15 cm"), fila.replace(/\s+/g, " "));
+    revisa("con consumo la meta dice sin consumo", (await txt("l-meta")).includes("sin consumo"));
+    revisa("sin errores de consola", !errores.length, errores.join(" | "));
+    await ctx.close();
+  }
+  {
+    // Achicar la cisterna: la boca se recorre y el cambio se aplica.
+    const { ctx, page, errores } = await abre({ w: 1280, h: 900, antes: espiaMotor });
+    await page.check("#editar");
+    await page.fill("#largo", "110");
+    await page.press("#largo", "Enter");
+    await page.locator("#largo").blur();
+    await page.waitForTimeout(2500);
+    const r = await page.evaluate(() => ({ L: window.visor.sim.L, boca: window.visor.cfg.boca }));
+    revisa("achicar la cisterna recorre la boca adentro", r.L === 1.1 && r.boca[0] <= 0.8, JSON.stringify(r));
+    // Corrida muy larga: 200 mil muestras no truenan la gráfica.
+    await page.click("#play");
+    await page.waitForTimeout(500);
+    const n = await page.evaluate(async () => {
+      const s = window.visor.sim, nc = s.nx * s.ny * s.nz;
+      const eventos = [];
+      for (let i = 0; i < 2e5; i++) {
+        eventos.push({ tipo: "muestra", t: s.t + 10 * (i + 1), cFinal: s.cFinal, stats: { cov: 0.01, cmin: 0.99, cmax: 1.01, masa_mg: 0, cmedia: s.cFinal, ek: 0, vmax: 0 }, sondas: { a: s.cFinal, b: s.cFinal, c: s.cFinal } });
+      }
+      const set = { c: new Float32Array(nc), uc: new Float32Array(nc), vc: new Float32Array(nc), wc: new Float32Array(nc), spd: new Float32Array(nc) };
+      window.__w.onmessage({ data: { ...s, tipo: "snap", t: s.t + 2e6, encendida: false, apagaEn: 0, vSim: 0, costoPaso: 1, vmax: 0, vEsc: 0.05, eventos, set } });
+      await new Promise((ok) => setTimeout(ok, 1000));
+      return window.visor.nSerie;
+    }).catch((e) => e.message);
+    revisa("200 mil muestras: la serie se diezma y la gráfica sigue", typeof n === "number" && n <= 3000 && !errores.length, `${n} muestras ${errores.join(" | ")}`);
+    await ctx.close();
+  }
+  console.log(`revisión: ${bien} bien, ${mal} mal`);
+  fallas += mal;
+}
+
 // ---------- rótulos ----------
 
 async function rotulos() {
@@ -450,7 +580,9 @@ if (modo === "controles" || modo === "todo") {
   await controles({ w: 1280, h: 800 });
   await controles({ w: 400, h: 860, dpr: 2, movil: true });
   await toqueYRespaldo();
+  await revision();
 }
+if (modo === "revision") await revision();
 if (modo === "rotulos" || modo === "todo") await rotulos();
 if (modo === "rendimiento" || modo === "todo") await rendimiento();
 await navegador.close();
