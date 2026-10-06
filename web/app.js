@@ -1575,8 +1575,11 @@ function dibujaGrafica() {
   c.fillRect(0, 0, w, h);
   if (!serie || !serie.t.length) return;
   const n = serie.t.length;
+  // Escala: al menos el doble de la meta y lo bastante para que las sondas no se corten (hasta 4 veces).
   const cfMax = Math.max(...serie.meta, 0.01);
-  const yMax = 2 * cfMax;
+  let sMax = 0;
+  for (const s of serie.s) for (const y of s) if (y > sMax) sMax = y;
+  const yMax = clamp(sMax * 1.08, 2 * cfMax, 4 * cfMax);
   const tFin = serie.t[n - 1];
   const xp = tFin > 120 ? 30 : tFin > 50 ? 15 : tFin > 25 ? 10 : 5;
   const xMax = Math.max(30, Math.ceil((tFin * 1.05) / xp) * xp);

@@ -348,6 +348,7 @@ input[type="range"] { accent-color: var(--acento); height: 40px; margin: 0; curs
   font-size: 14px;
   width: 100%;
 }
+.campo select { font-family: var(--f-ui); font-size: 15px; text-overflow: ellipsis; }
 .texto { font-size: 13px; color: var(--tinta-2); margin: 0; }
 .supuestos { font-size: 13px; color: var(--tinta-2); padding: 0 12px 12px 30px; margin: 0; display: grid; gap: 4px; }
 details.grupo > summary {
@@ -380,7 +381,8 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
     background: var(--papel);
     border-block: 1px solid var(--linea);
   }
-  .transporte .boton { min-height: 40px; padding: 0 10px; font-size: 14px; }
+  .transporte .boton { min-height: 40px; padding: 0 9px; font-size: 14px; }
+  .transporte select.boton { padding-right: 4px; }
   #h-planta { order: 2; }
   #h-corte { order: 3; }
   #p-bomba { order: 4; }
@@ -435,7 +437,7 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
       <button id="echar" class="boton primario" type="button">Echar cloro</button>
       <label for="velocidad" class="vh">Velocidad de la simulación</label>
       <select id="velocidad" class="boton chico" title="Velocidad pedida, en veces el tiempo real">
-        <option value="1">1x tiempo real</option>
+        <option value="1">1x</option>
         <option value="5">5x</option>
         <option value="15">15x</option>
         <option value="30" selected>30x</option>
