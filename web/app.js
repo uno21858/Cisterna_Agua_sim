@@ -56,7 +56,7 @@ let timerReinicio = 0;
 let arrastre = null;
 let nSnap = 0;
 
-const perf = { fps: 0, cuadroMs: 0, particulasMs: 0, fondoMs: 0, vistasMs: 0, motorPasoMs: 0, vSim: 0, motor: "" };
+const perf = { fps: 0, cuadroMs: 0, particulasMs: 0, fondoMs: 0, vistasMs: 0, overlayMs: 0, motorPasoMs: 0, vSim: 0, motor: "" };
 const media = (k, x) => (perf[k] = perf[k] ? 0.9 * perf[k] + 0.1 * x : x);
 
 // ---------- tokens del tema ----------
@@ -695,22 +695,37 @@ function creaRotulos(c, w, h, tam) {
     get obst() { return obst; },
   };
 
+  // Solo los obstáculos que tocan la zona donde puede caer el rótulo (hay cientos por vista).
+  function cercanos(zona, dueño = null) {
+    return obst.filter((o) => o[5] !== dueño && o[2] > zona[0] && o[0] < zona[2] && o[3] > zona[1] && o[1] < zona[3]);
+  }
+
   function colocaCota(p) {
     const tw = anchoTexto(c, p.txt, TAM_COTA, 500, true);
     const a = (TAM_COTA + 4) / 2, b = tw / 2 + 2;
+    const rects = p.cands.map((q) => (q.rot ? [q.tx - a, q.ty - b, q.tx + a, q.ty + b] : [q.tx - b, q.ty - a, q.tx + b, q.ty + a]));
+    const lineas = p.cands.map(({ linea: l }) => l && [Math.min(l[0], l[2]) - 1.5, Math.min(l[1], l[3]) - 1.5, Math.max(l[0], l[2]) + 1.5, Math.max(l[1], l[3]) + 1.5]);
+    const zona = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const r of [...rects, ...lineas]) {
+      if (!r) continue;
+      zona[0] = Math.min(zona[0], r[0]);
+      zona[1] = Math.min(zona[1], r[1]);
+      zona[2] = Math.max(zona[2], r[2]);
+      zona[3] = Math.max(zona[3], r[3]);
+    }
+    const ob = cercanos(zona);
     let mejor = null;
     p.cands.forEach((q, i) => {
-      const r = q.rot ? [q.tx - a, q.ty - b, q.tx + a, q.ty + b] : [q.tx - b, q.ty - a, q.tx + b, q.ty + a];
+      const r = rects[i];
       let costo = i * 8;
       if (fuera(r)) costo += 1e6;
       const rh = holgado(r);
       for (const u of puestos) costo += 40 * inter(rh, u);
-      for (const o of obst) costo += (o[4] >= 3 ? 5 * o[4] : o[4]) * inter(r, o);
-      if (q.linea) {
-        const [x1, y1, x2, y2] = q.linea;
-        const lr = [Math.min(x1, x2) - 1.5, Math.min(y1, y2) - 1.5, Math.max(x1, x2) + 1.5, Math.max(y1, y2) + 1.5];
+      for (const o of ob) costo += (o[4] >= 3 ? 5 * o[4] : o[4]) * inter(r, o);
+      const lr = lineas[i];
+      if (lr) {
         for (const u of puestos) costo += 8 * inter(lr, u);
-        for (const o of obst) costo += 0.6 * o[4] * inter(lr, o);
+        for (const o of ob) costo += 0.6 * o[4] * inter(lr, o);
       }
       if (!mejor || costo < mejor.costo) mejor = { costo, r, q };
     });
@@ -728,6 +743,8 @@ function creaRotulos(c, w, h, tam) {
     let mejor = null;
     const anillos = [p.r + 3, p.r + 15, p.r + 30, p.r + 48, p.r + 70];
     const rumbos = [...p.pref, ...ORDEN_RUMBOS.filter((q) => !p.pref.includes(q))];
+    const lejos = anillos.at(-1);
+    const ob = cercanos([p.x - lejos - tw, p.y - lejos - th, p.x + lejos + tw, p.y + lejos + th], p);
     anillos.forEach((d, ia) => {
       rumbos.forEach((nombre, ir) => {
         const [dx, dy] = RUMBOS[nombre];
@@ -741,7 +758,7 @@ function creaRotulos(c, w, h, tam) {
         const rh = holgado(r);
         for (const u of puestos) costo += 40 * inter(rh, u);
         // Tapar una pieza (peso 3 o más) cuesta más que alejarse un anillo.
-        for (const o of obst) if (o[5] !== p) costo += (o[4] >= 3 ? 5 * o[4] : o[4]) * inter(r, o);
+        for (const o of ob) costo += (o[4] >= 3 ? 5 * o[4] : o[4]) * inter(r, o);
         if (ia >= 1) {
           // La línea guía tampoco debe cruzar otros rótulos.
           const gx = clamp(p.x, r[0], r[2]), gy = clamp(p.y, r[1], r[3]);
@@ -1497,9 +1514,11 @@ function dibujaFlechas(c, v) {
 function dibujaVista(v) {
   if (!v.visible || !v.w) return;
   if (v.sucio) {
+    const t0 = performance.now();
     if (v.tipo === "planta") overlayPlanta(v);
     else overlayCorte(v);
     v.sucio = false;
+    media("overlayMs", performance.now() - t0);
   }
   const c = v.ctx;
   c.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
