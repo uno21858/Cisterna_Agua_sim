@@ -1,0 +1,659 @@
+<title>Mezcla de la cisterna</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Plano de plomería en vivo: papel frío y tinta azul negra, el cloro en una rampa azul,
+   magenta de revisión para la pieza que se mueve. Vistas a escala con cotas en cm. */
+:root {
+  --bg: #e8edf0;
+  --papel: #fafcfc;
+  --tinta: #14202a;
+  --tinta-2: #475663;
+  --tinta-3: #6f7e8a;
+  --linea: #cdd6dc;
+  --muro: #98a5ae;
+  --agua: #2f74c4;
+  --acento: #b02e66;
+  --acento-tinta: #ffffff;
+  --acento-suave: #f6e3eb;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --ramp-0: #f2f6fb;
+  --ramp-1: #b7d3f6;
+  --ramp-2: #3987e5;
+  --ramp-3: #0d366b;
+  --aviso: #7f4500;
+  --aviso-fondo: #fbefd9;
+  --aviso-borde: #e2b25e;
+  --peligro: #a32018;
+  --peligro-fondo: #fbe6e3;
+  --bien: #0b6b2e;
+  --f-ui: "Barlow Semi Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
+  --f-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 3px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a1015;
+    --papel: #10181f;
+    --tinta: #e3eaee;
+    --tinta-2: #a6b4be;
+    --tinta-3: #7d8d99;
+    --linea: #26333d;
+    --muro: #4b5c68;
+    --agua: #5b9be6;
+    --acento: #ef6f9c;
+    --acento-tinta: #1b0710;
+    --acento-suave: #3a1626;
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --ramp-0: #121d26;
+    --ramp-1: #183d69;
+    --ramp-2: #2b6fc0;
+    --ramp-3: #86b6ef;
+    --aviso: #f3b65a;
+    --aviso-fondo: #2a1f0e;
+    --aviso-borde: #6b4a17;
+    --peligro: #ff8f80;
+    --peligro-fondo: #2d1412;
+    --bien: #3fcf6e;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a1015;
+  --papel: #10181f;
+  --tinta: #e3eaee;
+  --tinta-2: #a6b4be;
+  --tinta-3: #7d8d99;
+  --linea: #26333d;
+  --muro: #4b5c68;
+  --agua: #5b9be6;
+  --acento: #ef6f9c;
+  --acento-tinta: #1b0710;
+  --acento-suave: #3a1626;
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --ramp-0: #121d26;
+  --ramp-1: #183d69;
+  --ramp-2: #2b6fc0;
+  --ramp-3: #86b6ef;
+  --aviso: #f3b65a;
+  --aviso-fondo: #2a1f0e;
+  --aviso-borde: #6b4a17;
+  --peligro: #ff8f80;
+  --peligro-fondo: #2d1412;
+  --bien: #3fcf6e;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--tinta);
+  font: 400 15px/1.4 var(--f-ui);
+  margin: 0;
+}
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+button, select, input { font: inherit; color: inherit; }
+.num { font-family: var(--f-num); font-variant-numeric: tabular-nums; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+
+.app {
+  display: grid;
+  gap: 12px;
+  padding-inline: 16px;
+  padding-block: 0 24px;
+  max-width: 1680px;
+  margin: 0 auto;
+}
+
+/* Cartela: el cuadro de datos de un plano, con los controles de la corrida. */
+.cartela {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px 16px;
+  margin-inline: -16px;
+  padding: 10px 16px;
+  background: var(--papel);
+  border-bottom: 1px solid var(--linea);
+}
+.cartela-datos { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-width: 0; flex: 1 1 320px; }
+.cartela h1 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.cartela dl { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 0; font-size: 13px; color: var(--tinta-2); }
+.cartela dl div { display: flex; gap: 4px; }
+.cartela dt { text-transform: uppercase; letter-spacing: .06em; font-size: 11px; align-self: center; color: var(--tinta-3); }
+.cartela dd { margin: 0; }
+.motor-prueba { color: var(--aviso); font-weight: 600; }
+
+.transporte { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.boton {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--linea);
+  border-radius: var(--r);
+  background: var(--papel);
+  color: var(--tinta);
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.boton:hover { border-color: var(--tinta-3); }
+.boton.primario { background: var(--acento); border-color: var(--acento); color: var(--acento-tinta); }
+.boton.primario:hover { filter: brightness(1.08); }
+.boton.chico { min-height: 40px; padding: 0 10px; font-weight: 500; font-size: 14px; }
+select.boton { padding-right: 8px; }
+.reloj { display: grid; line-height: 1.15; font-size: 13px; color: var(--tinta-2); min-width: 92px; }
+.reloj b { font-family: var(--f-num); font-weight: 500; color: var(--tinta); font-size: 15px; }
+
+/* Tablero: en teléfono todo en una columna; en escritorio dos columnas de vistas y el panel. */
+.tablero { display: grid; gap: 12px; min-width: 0; }
+.col { display: grid; gap: 12px; align-content: start; min-width: 0; }
+
+.hoja {
+  background: var(--papel);
+  border: 1px solid var(--linea);
+  min-width: 0;
+}
+.hoja-cab {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--linea);
+}
+.hoja-cab h2 {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.hoja-cab h2 small { font-weight: 500; letter-spacing: .02em; text-transform: none; color: var(--tinta-2); font-size: 13px; margin-left: 6px; }
+.lienzo { position: relative; }
+.lienzo canvas { display: block; width: 100%; touch-action: pan-y; }
+.pie {
+  margin: 0;
+  padding: 6px 12px 8px;
+  font-size: 13px;
+  color: var(--tinta-2);
+  border-top: 1px solid var(--linea);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+}
+.cargando { position: absolute; inset: 0; display: grid; place-items: center; color: var(--tinta-2); }
+
+.seg { display: inline-flex; border: 1px solid var(--linea); border-radius: var(--r); overflow: hidden; }
+.seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.seg label {
+  display: grid;
+  place-items: center;
+  min-height: 40px;
+  padding: 0 11px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--tinta-2);
+  cursor: pointer;
+  border-left: 1px solid var(--linea);
+  user-select: none;
+}
+.seg label:first-of-type { border-left: 0; }
+.seg input:checked + label { background: var(--tinta); color: var(--papel); }
+.seg input:focus-visible + label { outline: 2px solid var(--acento); outline-offset: -2px; }
+
+.leyenda { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--tinta-2); min-width: 0; }
+.rampa {
+  position: relative;
+  width: 150px;
+  height: 10px;
+  background: linear-gradient(to right, var(--ramp-0), var(--ramp-1), var(--ramp-2), var(--ramp-3));
+  border: 1px solid var(--linea);
+  flex: 0 1 150px;
+}
+.rampa-marcas { display: flex; justify-content: space-between; font-family: var(--f-num); font-size: 11px; color: var(--tinta-2); }
+.leyenda-bloque { display: grid; gap: 2px; min-width: 0; flex: 0 1 170px; }
+
+.zplanta { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--tinta-2); }
+.zplanta input { width: 110px; }
+
+/* Avisos */
+.avisos { display: grid; gap: 8px; }
+.avisos:empty { display: none; }
+.aviso {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--aviso-borde);
+  border-left-width: 4px;
+  background: var(--aviso-fondo);
+  color: var(--tinta);
+  font-size: 14px;
+}
+.aviso b { color: var(--aviso); }
+.aviso.peligro { border-color: var(--peligro); background: var(--peligro-fondo); }
+.aviso.peligro b { color: var(--peligro); }
+
+/* Lecturas: tablero de instrumentos */
+.lecturas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  margin: 0;
+}
+.lecturas > div {
+  padding: 8px 12px;
+  border-right: 1px solid var(--linea);
+  border-bottom: 1px solid var(--linea);
+  min-width: 0;
+}
+.lecturas dt { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--tinta-3); display: flex; align-items: center; gap: 6px; }
+.lecturas dd { margin: 2px 0 0; font-family: var(--f-num); font-variant-numeric: tabular-nums; font-size: 17px; font-weight: 500; overflow-wrap: anywhere; }
+.lecturas dd small { font-size: 12px; color: var(--tinta-2); font-weight: 400; }
+.lecturas .ancha { grid-column: span 2; }
+.muestra { width: 10px; height: 10px; border: 2px solid var(--papel); outline: 1px solid var(--linea); flex: none; }
+.chip { display: inline-block; font-family: var(--f-ui); font-size: 12px; font-weight: 600; padding: 1px 6px; border-radius: 2px; vertical-align: 2px; margin-left: 4px; }
+.chip.ok { background: var(--bien); color: var(--papel); }
+.chip.no { background: var(--linea); color: var(--tinta); }
+
+/* Gráfica */
+.graf-leyenda { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--tinta-2); }
+.graf-leyenda span { display: inline-flex; align-items: center; gap: 5px; }
+.linea-muestra { width: 16px; height: 0; border-top: 2px solid; }
+.linea-muestra.punteada { border-top-style: dashed; border-color: var(--tinta-2); }
+.banda-muestra { width: 16px; height: 10px; background: var(--linea); }
+.tip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--papel);
+  border: 1px solid var(--tinta-3);
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+  z-index: 2;
+}
+.tip .num { font-size: 12px; }
+
+/* Corridas */
+.tabla-caja { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--linea); white-space: nowrap; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--tinta-3); font-weight: 600; }
+td.num, th.num { text-align: right; }
+tr.actual td:first-child { box-shadow: inset 3px 0 0 var(--acento); }
+.vacio { padding: 10px 12px; color: var(--tinta-2); margin: 0; font-size: 14px; }
+
+/* Panel de controles */
+.panel { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.grupo { background: var(--papel); border: 1px solid var(--linea); margin: 0; padding: 0; min-width: 0; }
+.grupo > h3 {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--linea);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.grupo > h3 .estado { font-weight: 600; letter-spacing: .02em; text-transform: none; font-size: 13px; color: var(--acento); }
+.cuerpo { display: grid; gap: 4px; padding: 8px 12px 12px; }
+.fila { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 8px; }
+.fila label { font-size: 14px; font-weight: 500; }
+.fila output { font-family: var(--f-num); font-size: 13px; color: var(--tinta); text-align: right; font-variant-numeric: tabular-nums; }
+.fila .nota { grid-column: 1 / -1; font-size: 12px; color: var(--tinta-2); margin-top: -4px; }
+.fila input[type="range"] { grid-column: 1 / -1; width: 100%; }
+input[type="range"] { accent-color: var(--acento); height: 40px; margin: 0; cursor: pointer; background: transparent; }
+.botones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.botones .seg { flex: 1 1 auto; }
+.botones .seg label { flex: 1 1 auto; }
+.etq { font-size: 14px; font-weight: 500; margin-top: 6px; }
+.checks { display: flex; flex-wrap: wrap; gap: 0 14px; }
+.check { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; font-size: 14px; cursor: pointer; }
+.check input { width: 18px; height: 18px; accent-color: var(--acento); margin: 0; }
+.campos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.campo { display: grid; gap: 2px; font-size: 13px; color: var(--tinta-2); }
+.campo input, .campo select {
+  min-height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--linea);
+  border-radius: var(--r);
+  background: var(--papel);
+  color: var(--tinta);
+  font-family: var(--f-num);
+  font-size: 14px;
+  width: 100%;
+}
+.texto { font-size: 13px; color: var(--tinta-2); margin: 0; }
+.supuestos { font-size: 13px; color: var(--tinta-2); padding: 0 12px 12px 30px; margin: 0; display: grid; gap: 4px; }
+details.grupo > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: 0 12px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+}
+details.grupo > summary::before { content: "+"; font-family: var(--f-num); width: 18px; color: var(--tinta-3); }
+details.grupo[open] > summary::before { content: "-"; }
+details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
+
+@media (max-width: 759px) {
+  .tablero, .col { display: contents; }
+  .app { gap: 12px; }
+  #h-planta { order: 1; }
+  #h-corte { order: 2; }
+  #avisos { order: 3; }
+  #h-lecturas { order: 4; }
+  #h-grafica { order: 5; }
+  .panel { order: 6; }
+  #h-corridas { order: 7; }
+  .cartela { padding-block: 8px; }
+  .cartela dl { display: none; }
+  .reloj { min-width: 0; }
+  .lecturas .ancha { grid-column: span 2; }
+}
+@media (min-width: 760px) {
+  .tablero { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); align-items: start; }
+  .panel { grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); align-items: start; }
+}
+@media (min-width: 1200px) {
+  .app { grid-template-columns: minmax(0, 1fr) 312px; align-items: start; }
+  .cartela { grid-column: 1 / -1; }
+  .panel {
+    grid-template-columns: 1fr;
+    position: sticky;
+    top: calc(env(safe-area-inset-top, 0px) + 74px);
+    max-height: calc(100dvh - 86px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; }
+}
+</style>
+
+<div class="app">
+  <header class="cartela">
+    <div class="cartela-datos">
+      <h1>Mezcla de la cisterna</h1>
+      <dl>
+        <div><dt>Obra</dt><dd>Zapopan, Jal.</dd></div>
+        <div><dt>Volumen</dt><dd id="d-volumen" class="num">10.0 m³</dd></div>
+        <div><dt>Cotas</dt><dd>cm</dd></div>
+        <div><dt>Motor</dt><dd id="d-motor">cargando</dd></div>
+      </dl>
+    </div>
+    <div class="transporte">
+      <button id="play" class="boton" type="button" aria-pressed="true">Pausa</button>
+      <button id="reiniciar" class="boton" type="button">Reiniciar</button>
+      <button id="echar" class="boton primario" type="button">Echar cloro</button>
+      <label for="velocidad" class="vh">Velocidad de la simulación</label>
+      <select id="velocidad" class="boton chico" title="Velocidad pedida, en veces el tiempo real">
+        <option value="1">1x tiempo real</option>
+        <option value="5">5x</option>
+        <option value="15">15x</option>
+        <option value="30" selected>30x</option>
+        <option value="60">60x</option>
+        <option value="120">120x</option>
+      </select>
+      <div class="reloj" aria-live="off">
+        <b id="reloj-t">0.0 min</b>
+        <span id="reloj-v">arrancando</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="tablero">
+    <div class="col">
+      <section class="hoja" id="h-planta" aria-labelledby="t-planta">
+        <div class="hoja-cab">
+          <h2 id="t-planta">Planta <small id="t-planta-sub">promedio de toda la columna</small></h2>
+          <div class="botones" style="margin:0">
+            <div class="seg" role="radiogroup" aria-label="Altura que muestra la planta">
+              <input type="radio" name="planta" id="planta-prom" value="promedio" checked><label for="planta-prom">Promedio</label>
+              <input type="radio" name="planta" id="planta-z" value="z"><label for="planta-z">A una altura</label>
+            </div>
+            <span class="zplanta" id="zplanta-caja" hidden>
+              <label for="z-planta" class="vh">Altura de la planta en cm</label>
+              <input type="range" id="z-planta" min="5" max="115" step="5" value="45">
+              <output id="o-z-planta" for="z-planta" class="num">45 cm</output>
+            </span>
+          </div>
+        </div>
+        <div class="lienzo">
+          <canvas id="c-planta" role="img" aria-label="Vista superior de la cisterna con las bombas, el flotador, el mástil y el flujo"></canvas>
+          <div class="cargando" id="cargando">Cargando el motor...</div>
+        </div>
+        <div class="pie">
+          <span class="leyenda-bloque">
+            <span class="leyenda"><span id="leyenda-nombre">Cloro</span><span class="rampa" aria-hidden="true"></span></span>
+            <span class="rampa-marcas"><span id="ley-0">0</span><span id="ley-1">0.75</span><span id="ley-2">1.5 mg/L</span></span>
+          </span>
+          <span id="pie-planta">Arrastra la bomba de mezcla para moverla y la punta de su flecha para girar el chorro.</span>
+        </div>
+      </section>
+
+      <div class="avisos" id="avisos" aria-live="polite"></div>
+
+      <section class="hoja" id="h-lecturas" aria-labelledby="t-lecturas">
+        <div class="hoja-cab"><h2 id="t-lecturas">Lecturas <small id="t-lecturas-sub">desde la última dosis</small></h2></div>
+        <dl class="lecturas">
+          <div><dt>Desde la dosis</dt><dd id="l-tiempo">0.0 <small>min</small></dd></div>
+          <div><dt>CoV</dt><dd id="l-cov">-</dd></div>
+          <div><dt>Rango</dt><dd id="l-rango">-</dd></div>
+          <div><dt>Meta</dt><dd id="l-meta">-</dd></div>
+          <div><dt><span class="muestra" style="background:var(--s1)"></span>Superficie</dt><dd id="l-s0">-</dd></div>
+          <div><dt><span class="muestra" style="background:var(--s2)"></span>Llave casa</dt><dd id="l-s1">-</dd></div>
+          <div><dt><span class="muestra" style="background:var(--s3)"></span>Sonda ORP</dt><dd id="l-s2">-</dd></div>
+          <div><dt>Bomba de mezcla</dt><dd id="l-estado">-</dd></div>
+          <div><dt>Caudal Q</dt><dd id="l-q">-</dd></div>
+          <div><dt>Chorro u</dt><dd id="l-u">-</dd></div>
+          <div><dt>Momento M</dt><dd id="l-m">-</dd></div>
+          <div><dt>Fórmula</dt><dd id="l-formula">-</dd></div>
+          <div><dt>Simulado CoV 5 %</dt><dd id="l-sim5">-</dd></div>
+          <div><dt>Toda ±10 %</dt><dd id="l-sim10">-</dd></div>
+          <div class="ancha"><dt>Montaje</dt><dd id="l-montaje">-</dd></div>
+        </dl>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="hoja" id="h-corte" aria-labelledby="t-corte">
+        <div class="hoja-cab">
+          <h2 id="t-corte">Corte <small id="t-corte-sub">a lo largo</small></h2>
+          <div class="seg" role="radiogroup" aria-label="Plano del corte vertical">
+            <input type="radio" name="corte" id="corte-largo" value="largo" checked><label for="corte-largo">A lo largo</label>
+            <input type="radio" name="corte" id="corte-chorro" value="chorro"><label for="corte-chorro">Plano del chorro</label>
+          </div>
+        </div>
+        <div class="lienzo">
+          <canvas id="c-corte" role="img" aria-label="Corte vertical de la cisterna con el nivel del agua, las bombas, el mástil y el flujo"></canvas>
+        </div>
+        <p class="pie" id="pie-corte">Corte por la bomba de mezcla. Partículas a ±25 cm del corte.</p>
+      </section>
+
+      <section class="hoja" id="h-grafica" aria-labelledby="t-grafica">
+        <div class="hoja-cab">
+          <h2 id="t-grafica">Cloro en las sondas</h2>
+          <div class="graf-leyenda">
+            <span><i class="linea-muestra" style="border-color:var(--s1)"></i>Superficie</span>
+            <span><i class="linea-muestra" style="border-color:var(--s2)"></i>Llave de la casa</span>
+            <span><i class="linea-muestra" style="border-color:var(--s3)"></i>Sonda ORP</span>
+            <span><i class="banda-muestra"></i>Rango de toda la cisterna</span>
+            <span><i class="linea-muestra punteada"></i>Meta</span>
+          </div>
+        </div>
+        <div class="lienzo" id="graf-caja">
+          <canvas id="c-grafica" role="img" aria-label="Cloro en mg/L en la superficie, la llave de la casa y la sonda ORP contra los minutos de la corrida"></canvas>
+          <div class="tip" id="tip" hidden></div>
+        </div>
+      </section>
+
+      <section class="hoja" id="h-corridas" aria-labelledby="t-corridas">
+        <div class="hoja-cab"><h2 id="t-corridas">Corridas <small>para comparar dónde va la bomba</small></h2></div>
+        <div class="tabla-caja">
+          <table>
+            <thead>
+              <tr><th>#</th><th>Bomba</th><th>Chorro</th><th>Dosis</th><th class="num">Fórmula</th><th class="num">CoV 5 %</th><th class="num">Toda ±10 %</th></tr>
+            </thead>
+            <tbody id="corridas"></tbody>
+          </table>
+        </div>
+        <p class="vacio" id="corridas-nota">Cada reinicio guarda una fila. Los tiempos cuentan desde la primera dosis de la corrida.</p>
+      </section>
+    </div>
+  </main>
+
+  <aside class="panel" aria-label="Controles">
+    <section class="grupo" aria-labelledby="g-bomba">
+      <h3 id="g-bomba">Bomba de mezcla <span class="estado" id="estado-montaje">en el mástil</span></h3>
+      <div class="cuerpo">
+        <div class="fila">
+          <label for="altura">Altura sobre el fondo</label><output id="o-altura" for="altura">50 cm</output>
+          <input type="range" id="altura" min="8" max="110" step="1" value="50">
+        </div>
+        <div class="fila">
+          <label for="angulo">Inclinación del mástil</label><output id="o-angulo" for="angulo">60°</output>
+          <input type="range" id="angulo" min="20" max="90" step="1" value="60">
+          <span class="nota">Grados sobre la horizontal. Con la bomba en el mástil también mueve su posición.</span>
+        </div>
+        <div class="fila">
+          <label for="azimut">Dirección del chorro en planta</label><output id="o-azimut" for="azimut">33°</output>
+          <input type="range" id="azimut" min="-180" max="180" step="1" value="33">
+        </div>
+        <div class="fila">
+          <label for="elevacion">Inclinación del chorro</label><output id="o-elevacion" for="elevacion">-60°</output>
+          <input type="range" id="elevacion" min="-90" max="90" step="1" value="-60">
+          <span class="nota">Negativo hacia abajo. 0 es horizontal.</span>
+        </div>
+        <div class="botones">
+          <button id="montar" class="boton chico" type="button">Montar en el mástil</button>
+          <button id="seguir" class="boton chico" type="button">Chorro a lo largo del mástil</button>
+        </div>
+        <div class="fila">
+          <label for="caudal">Caudal a descarga libre</label><output id="o-caudal" for="caudal">800 L/h</output>
+          <input type="range" id="caudal" min="200" max="1200" step="10" value="800">
+          <span class="nota">Ficha de la Mibee: 800 L/h, sin verificar. Mídelo con una cubeta y ponlo aquí.</span>
+        </div>
+        <div class="fila">
+          <label for="boquilla">Boquilla</label><output id="o-boquilla" for="boquilla">8 mm</output>
+          <input type="range" id="boquilla" min="4" max="16" step="0.5" value="8">
+          <span class="nota">Salida de fábrica: 8 mm interior.</span>
+        </div>
+        <label class="campo" for="modo-bomba">Cuándo trabaja
+          <select id="modo-bomba">
+            <option value="firmware" selected>Como el firmware: 45 min tras cada dosis</option>
+            <option value="siempre">Siempre encendida</option>
+            <option value="apagada">Apagada</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="grupo" aria-labelledby="g-agua">
+      <h3 id="g-agua">Agua y cloro</h3>
+      <div class="cuerpo">
+        <div class="fila">
+          <label for="nivel">Nivel del agua</label><output id="o-nivel" for="nivel">120 cm</output>
+          <input type="range" id="nivel" min="30" max="130" step="5" value="120">
+        </div>
+        <div class="fila">
+          <label for="consumo">Consumo de la casa</label><output id="o-consumo" for="consumo">0 L/min</output>
+          <input type="range" id="consumo" min="0" max="40" step="1" value="0">
+          <span class="nota">Sale por la rejilla del pozo y entra igual por el flotador, sin cloro.</span>
+        </div>
+        <div class="fila">
+          <label for="dosis">Dosis de Cloralex</label><output id="o-dosis" for="dosis">150 mL</output>
+          <input type="range" id="dosis" min="50" max="300" step="10" value="150">
+        </div>
+        <span class="etq" id="etq-lugar">Dónde se echa</span>
+        <div class="seg" role="radiogroup" aria-labelledby="etq-lugar">
+          <input type="radio" name="lugar" id="lugar-llenado" value="llenado" checked><label for="lugar-llenado">Flotador</label>
+          <input type="radio" name="lugar" id="lugar-mastil" value="mastil"><label for="lugar-mastil">Boca</label>
+          <input type="radio" name="lugar" id="lugar-clic" value="clic"><label for="lugar-clic">Tocar planta</label>
+        </div>
+        <p class="texto" id="nota-lugar">Se usa en la próxima dosis.</p>
+      </div>
+    </section>
+
+    <section class="grupo" aria-labelledby="g-capas">
+      <h3 id="g-capas">Capas</h3>
+      <div class="cuerpo">
+        <span class="etq" id="etq-fondo">Fondo de las vistas</span>
+        <div class="seg" role="radiogroup" aria-labelledby="etq-fondo">
+          <input type="radio" name="fondo" id="fondo-c" value="c" checked><label for="fondo-c">Cloro</label>
+          <input type="radio" name="fondo" id="fondo-vel" value="vel"><label for="fondo-vel">Rapidez</label>
+          <input type="radio" name="fondo" id="fondo-nada" value="nada"><label for="fondo-nada">Nada</label>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="capa-part" checked>Partículas</label>
+          <label class="check"><input type="checkbox" id="capa-flechas">Flechas</label>
+          <label class="check"><input type="checkbox" id="capa-cotas" checked>Cotas</label>
+          <label class="check"><input type="checkbox" id="capa-nombres" checked>Nombres</label>
+        </div>
+        <label class="campo" for="malla">Malla del cálculo
+          <select id="malla">
+            <option value="0.1" selected>10 cm (la validada)</option>
+            <option value="0.15">15 cm (más rápida)</option>
+            <option value="0.2">20 cm (para teléfonos lentos)</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="grupo" aria-labelledby="g-editar">
+      <h3 id="g-editar">Cisterna</h3>
+      <div class="cuerpo">
+        <label class="check"><input type="checkbox" id="editar">Editar la cisterna</label>
+        <div id="editar-caja" class="cuerpo" style="padding:0" hidden>
+          <p class="texto">Arrastra en la planta la boca de la tapa, la bomba de pozo y el flotador.</p>
+          <div class="campos">
+            <label class="campo" for="largo">Largo (cm)<input type="number" id="largo" min="100" max="800" step="1" value="340" inputmode="numeric"></label>
+            <label class="campo" for="ancho">Ancho (cm)<input type="number" id="ancho" min="100" max="800" step="1" value="245" inputmode="numeric"></label>
+            <label class="campo" for="ztapa">Travesaño (cm)<input type="number" id="ztapa" min="40" max="300" step="1" value="135" inputmode="numeric"></label>
+            <label class="campo" for="zrejilla">Rejilla pozo (cm)<input type="number" id="zrejilla" min="5" max="200" step="1" value="45" inputmode="numeric"></label>
+          </div>
+          <button id="medidas-doc" class="boton chico" type="button">Regresar a las medidas supuestas</button>
+        </div>
+      </div>
+    </section>
+
+    <details class="grupo">
+      <summary>Supuestos</summary>
+      <ul class="supuestos">
+        <li>Planta rectangular de 3.40 x 2.45 m y posiciones de la boca, la bomba de pozo y el flotador: supuestas, cámbialas en Editar.</li>
+        <li>Boca de 60 x 60 cm, muros de 15 cm, losa de 10 cm y cuerpo de la bomba de pozo de 4": solo para el dibujo.</li>
+        <li>Curva de la Mibee lineal entre 800 L/h a 0 m y 0 L/h a 5 m (ficha sin verificar).</li>
+        <li>Velocidad del chorro donde pega: chorro redondo libre, u = 6.2 u0 d / x. Es una estimación.</li>
+        <li>El cloro es un trazador: no se lo comen el H2S ni la materia orgánica. La superficie es una tapa rígida.</li>
+        <li>Mezcla calibrada con t = 10.2 V^(2/3) / √M; la prueba 9c en la cisterna real es la que manda.</li>
+      </ul>
+    </details>
+  </aside>
+</div>
+
+<script type="module" src="app.js"></script>

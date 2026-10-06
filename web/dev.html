@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Para pruebas locales: imita el esqueleto con el que se publica index.html y lo carga tal cual. -->
+<style>
+:root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; font: 14px system-ui, -apple-system, "Segoe UI", sans-serif; background: #f9f9f7; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<script type="module">
+const html = await (await fetch("index.html", { cache: "no-store" })).text();
+const doc = new DOMParser().parseFromString(html, "text/html");
+document.title = doc.title;
+for (const n of doc.head.querySelectorAll("link, style")) document.head.append(document.adoptNode(n));
+for (const n of [...doc.body.childNodes]) {
+  if (n.nodeName !== "SCRIPT") document.body.append(document.adoptNode(n));
+}
+const s = document.createElement("script");
+s.type = "module";
+s.src = doc.querySelector("script[src]").getAttribute("src");
+document.body.append(s);
+</script>
+</body>
+</html>
