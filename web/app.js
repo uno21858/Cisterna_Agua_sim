@@ -785,6 +785,23 @@ function creaRotulos(c, w, h, tam) {
     get obst() { return obst; },
   };
 
+  // Tapar una pieza (peso 3 o más) cuesta más que alejarse un anillo, y taparla más de 5 px2 (lo que
+  // choques() reporta) cuesta como alejarse tres.
+  function costoPiezas(r, ob) {
+    let costo = 0, pesado = 0;
+    for (const o of ob) {
+      const a = inter(r, o);
+      if (!a) continue;
+      if (o[4] >= 3) {
+        costo += 5 * o[4] * a;
+        pesado += a;
+      } else {
+        costo += o[4] * a;
+      }
+    }
+    return pesado > 5 ? costo + 400 : costo;
+  }
+
   // Solo los obstáculos que tocan la zona donde puede caer el rótulo (hay cientos por vista).
   function cercanos(zona, dueño = null) {
     return obst.filter((o) => o[5] !== dueño && o[2] > zona[0] && o[0] < zona[2] && o[3] > zona[1] && o[1] < zona[3]);
@@ -811,7 +828,7 @@ function creaRotulos(c, w, h, tam) {
       if (fuera(r)) costo += 1e6;
       const rh = holgado(r);
       for (const u of puestos) costo += 40 * inter(rh, u);
-      for (const o of ob) costo += (o[4] >= 3 ? 5 * o[4] : o[4]) * inter(r, o);
+      costo += costoPiezas(r, ob);
       const lr = lineas[i];
       if (lr) {
         for (const u of puestos) costo += 8 * inter(lr, u);
@@ -847,8 +864,7 @@ function creaRotulos(c, w, h, tam) {
         if (fuera(r)) costo += 1e6;
         const rh = holgado(r);
         for (const u of puestos) costo += 40 * inter(rh, u);
-        // Tapar una pieza (peso 3 o más) cuesta más que alejarse un anillo.
-        for (const o of ob) costo += (o[4] >= 3 ? 5 * o[4] : o[4]) * inter(r, o);
+        costo += costoPiezas(r, ob);
         if (ia >= 1) {
           // La línea guía tampoco debe cruzar otros rótulos.
           const gx = clamp(p.x, r[0], r[2]), gy = clamp(p.y, r[1], r[3]);
@@ -1089,7 +1105,8 @@ function overlayPlanta(v) {
       trazo(c, [[xa, yl], [xb, yl]], T.acento, 0.9, [1, 3]);
       R.linea(xa, yl, xb, yl, 2, 0.5);
       const cands = [];
-      for (const f of fr) for (const dy of [10, -10]) cands.push({ tx: xa + (xb - xa) * f, ty: yl + dy });
+      // Más lejos de la línea solo si cerca no cabe (la cota corta de una esquina choca con la marca A).
+      for (const dys of [[10, -10], [22, -22]]) for (const f of fr) for (const dy of dys) cands.push({ tx: xa + (xb - xa) * f, ty: yl + dy });
       R.cota(String(cm(dxm)), cands, { color: T.acento, prio: 2 });
     }
     if (dym > 0.08) {
@@ -1098,7 +1115,7 @@ function overlayPlanta(v) {
       R.linea(xl, ya, xl, yb, 2, 0.5);
       const s = String(cm(dym)), tw = anchoTexto(c, s, TAM_COTA, 500, true);
       const cands = [];
-      for (const f of fr) for (const dx of [6 + tw / 2, -6 - tw / 2]) cands.push({ tx: xl + dx, ty: ya + (yb - ya) * f });
+      for (const d of [6, 18]) for (const f of fr) for (const dx of [d + tw / 2, -d - tw / 2]) cands.push({ tx: xl + dx, ty: ya + (yb - ya) * f });
       R.cota(s, cands, { color: T.acento, prio: 2 });
     }
   }
