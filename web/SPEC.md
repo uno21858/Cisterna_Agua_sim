@@ -2,7 +2,7 @@
 
 Fuente de verdad de la física: `cisterna_sim/` (Python). El motor JS es un port 1:1 de
 `cisterna_sim/solver.py` + `config.py` + `bomba.py`, más las extensiones de abajo.
-Todo texto visible en español de México. Nunca usar el carácter "—" (em dash) ni "–".
+Todo texto visible en español de México. Nunca usar la raya larga (U+2014) ni la media (U+2013).
 
 ## Archivos
 
@@ -135,3 +135,47 @@ con la configuración por defecto y el flujo desarrollándose. Debe:
    modo oscuro por `prefers-color-scheme` (guardado con `:root:not([data-theme="light"])`)
    y repetido en `:root[data-theme="dark"]`, `body` con fondo explícito, funciona a 400 px
    de ancho sin scroll horizontal (vistas apiladas), tipografía de Google Fonts con fallback.
+
+## Cisterna redonda (forma = "redonda")
+
+La cisterna real es cilíndrica. Mismo solver MAC sobre la caja que la contiene, con una máscara.
+Debe implementarse igual en `web/solver.js` y en `cisterna_sim/` (paridad < 1e-6 en un caso de
+referencia, con la presión resuelta a tolerancia estricta). Con `forma = "rectangular"` todo debe
+quedar bit a bit como hoy (las pruebas de referencia actuales no cambian).
+
+Config nueva: `forma` ("rectangular" | "redonda", por ahora default "rectangular"; el orquestador lo
+cambia al final) y `diametro` (m). Con "redonda": `largo = ancho = diametro` (se ignoran los que
+vengan), centro `(D/2, D/2)`, radio `R = D/2`.
+
+1. **Celdas de agua**: `fluido[i][j] = (xc - cx)² + (yc - cy)² <= R²` con `xc = (i + 0.5)·dx`,
+   `yc = (j + 0.5)·dy`; vale para toda la columna k.
+2. **Caras abiertas**: cara u (i, j, k) abierta si `1 <= i <= nx-1` y `fluido[i-1][j]` y `fluido[i][j]`;
+   cara v igual en j; cara w (i, j, k) abierta si `1 <= k <= nz-1` y `fluido[i][j]`. Las demás
+   están cerradas y valen 0 después de cada sub-paso (advección, difusión + fuerza, proyección).
+3. **Difusión de momento**: el mismo laplaciano de 7 puntos; un vecino que es cara cerrada vale 0, y
+   además, por cada vecino tangencial que sea cara cerrada dentro de la caja, se suma `-u/h²`
+   (equivale a fantasma `-u`: sin deslizamiento en la pared escalonada). En las paredes de la caja
+   sigue el manejo actual. Solo se actualizan caras abiertas.
+4. **Presión**: sobre celdas de agua, `A p = Σ_{caras abiertas f} (p_vecino - p)/h_f²`, `b = div(u*)/dt`
+   (div con caras cerradas en 0), quitando a `b` su media sobre celdas de agua. Resolver `(-A) p = -b`
+   con gradiente conjugado precondicionado: `z = M(r)` = solución exacta por DCT de la caja de
+   `(-lap_caja) z = r` con r extendida con 0 fuera del agua, luego z = 0 fuera del agua y restar a z
+   su media sobre el agua. Arranque con la p del paso anterior (guardarla). Parar cuando
+   `max|r| <= tol · max|b|` con `tol = 1e-8` (o 300 iteraciones; si se llega, avisar una vez por
+   consola). Corrección: `u_f -= dt·(p_vecino - p)/h` solo en caras abiertas.
+5. **Cloro**: flujo advectivo y difusivo cero en caras cerradas. En la pendiente MUSCL, un vecino
+   fuera del agua toma el valor de la celda propia (gradiente cero, como en las paredes de la caja).
+   El cloro en celdas fuera del agua es siempre 0.
+6. **Gaussianas** (fuerza del chorro, dosis, sumidero y fuente del consumo): pesos solo en caras
+   abiertas o celdas de agua, normalizados ahí (la integral se conserva: M·dir, masa de la dosis, Q).
+7. **Estadísticas** (cov, cmin, cmax, media, masa, energía, vmax) y `cFinal`: solo sobre celdas de
+   agua; `cFinal = masa / (n_agua · Vcelda · 1000)`. Volumen discreto `n_agua·Vcelda` y volumen
+   geométrico `π R² nivel` ambos disponibles.
+8. **Validación**: cada punto (bomba, sonda ORP, pozo, dosis, boca/superficie, llenado con consumo)
+   debe quedar a distancia radial `<= R - 0.5·dx` del centro y con `0 < z < nivel`; además
+   `diametro / dx >= 8`.
+9. **Geometría**: `rumbo()` con forma redonda = unitario de la boca hacia el centro (si la boca está
+   a menos de 1 mm del centro, `(1, 0)`): el "lado opuesto" sustituye a la "esquina opuesta".
+10. **Visor**: planta circular a escala, fuera del círculo se pinta como muro; el corte lateral es la
+   cuerda que pasa por la bomba (paredes en `cx ± sqrt(R² - (y - cy)²)`); en "editar cisterna" se
+   elige forma y, si es redonda, diámetro en vez de largo y ancho. Las partículas no salen del agua.
