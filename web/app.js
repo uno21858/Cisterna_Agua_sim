@@ -16,6 +16,9 @@ const APAGA_S = 45 * 60;
 const ESTELA = 12;
 const DT_PART_MAX = 0.2;
 const JUNTOS_M = 0.12;
+const ALTURA_MIN = 0.08; // altura mínima de la bomba de mezcla: la misma en el slider y al arrastrarla
+const SERIE_MAX = 3000; // muestras de la gráfica antes de diezmarla a la mitad
+const DE_FRENTE = 0.3; // si el chorro avanza menos que esto en el plano de una vista, se dibuja de frente
 
 const $ = (id) => document.getElementById(id);
 const copia = (o) => structuredClone(o);
@@ -25,7 +28,12 @@ const r2 = (x) => Math.round(x * 100) / 100;
 const reduceMov = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const cfg = copia(DEFAULTS);
-let geo = geometria(copia(cfg));
+// cfg es lo que editan los controles. cfgV es la configuración que se dibuja y se lee: la misma cfg si
+// es válida, o la que corre el motor (cfgActiva) si el último cambio se rechazó, con la dosis de cfg.
+let cfgActiva = null;
+let cfgV = cfg;
+let geo = geometria(copia(cfgV));
+const geoEd = () => (cfgV === cfg ? geo : geometria(copia(cfg)));
 
 const est = {
   corriendo: true,
@@ -197,12 +205,26 @@ function mandaControl() {
 
 // ---------- corrida ----------
 
-function volumen(c = cfg) {
+function volumen(c = cfgV) {
   return c.largo * c.ancho * c.nivel;
 }
 
+// El punto tocado en la planta es donde se echa el cloro: siempre 10 cm bajo el nivel de esa config.
+function enSuperficie(lugar, nivel) {
+  return Array.isArray(lugar) ? [lugar[0], lugar[1], r2(nivel - 0.10)] : lugar;
+}
+
+// Lo que se dibuja mientras el último cambio está rechazado: la config del motor con la dosis de cfg
+// (cantidad y lugar se usan en la próxima dosis sin reiniciar).
+function cfgDeVista() {
+  if (!errorCfg || !cfgActiva) return cfg;
+  return { ...copia(cfgActiva), dosis_ml: cfg.dosis_ml, lugar_dosis: enSuperficie(copia(cfg.lugar_dosis), cfgActiva.nivel) };
+}
+
+// La dosis va a la simulación que corre: su geometría y su nivel, con la cantidad y el lugar de cfg.
 function dosisActual() {
-  const g = geometria(copia(cfg));
+  const base = cfgActiva ?? cfg;
+  const g = geometria({ ...copia(base), lugar_dosis: enSuperficie(copia(cfg.lugar_dosis), base.nivel) });
   return { masa: cfg.dosis_ml * cfg.cloralex_mg_ml, punto: g.punto_dosis };
 }
 
@@ -215,12 +237,15 @@ function arranca() {
   }
   errorCfg = null;
   if (!motor) return false;
+  cfgActiva = copia(cfg);
+  cfgV = cfg;
+  geo = geometria(copia(cfgV));
   idSim++;
   if (corrida) corrida.activa = false;
   dosisT = [];
   deteccion = { cov5: null, todo10: null };
   ultimo = { stats: null, sondas: null };
-  serie = { t: [], s: [[], [], []], lo: [], hi: [], meta: [], nombres: [] };
+  serie = { t: [], s: [[], [], []], lo: [], hi: [], meta: [], nombres: [], cfMax: 0 };
   corrida = { n: (corridas[0]?.n ?? 0) + 1, ...resumenCfg(), cov5: null, todo10: null, tMax: 0, activa: true };
   corridas.unshift(corrida);
   if (corridas.length > 12) corridas.pop();
@@ -255,9 +280,11 @@ function registra(m) {
   serie.lo.push(st.cmin * cf);
   serie.hi.push(st.cmax * cf);
   serie.meta.push(cf);
+  if (cf > serie.cfMax) serie.cfMax = cf;
+  if (serie.t.length > SERIE_MAX) diezma(serie);
   const tm = (m.t - tDosis) / 60;
-  const vol = sim ? sim.L * sim.W * sim.H : volumen();
-  const relMedia = cf > 0 ? st.masa_mg / (vol * 1000) / cf : 1;
+  // st.cov ya es desviación / media actual (con consumo la media baja); el ±10 % también va contra la media.
+  const relMedia = cf > 0 ? st.cmedia / cf : 1;
   if (tm > 0 && deteccion.cov5 == null && st.cov < 0.05) deteccion.cov5 = tm;
   if (tm > 0 && deteccion.todo10 == null && st.cmin >= 0.9 * relMedia && st.cmax <= 1.1 * relMedia) deteccion.todo10 = tm;
   if (dosisT.length === 1 && corrida) {
@@ -266,6 +293,23 @@ function registra(m) {
     if (corrida.todo10 == null && deteccion.todo10 != null) corrida.todo10 = deteccion.todo10;
   }
   graficaSucia = true;
+}
+
+// Corridas muy largas (una muestra cada 10 s simulados): junta las muestras de dos en dos para que la
+// gráfica no crezca sin límite. El rango conserva su mínimo y su máximo.
+function diezma(s) {
+  const m = s.t.length, pares = m >> 1;
+  const junta = (a, f) => {
+    for (let i = 0; i < pares; i++) a[i] = f(a[2 * i], a[2 * i + 1]);
+    if (m % 2) a[pares] = a[m - 1];
+    a.length = pares + (m % 2);
+  };
+  const primera = (a) => a;
+  junta(s.t, primera);
+  for (const q of s.s) if (q.length === m) junta(q, primera);
+  junta(s.lo, Math.min);
+  junta(s.hi, Math.max);
+  junta(s.meta, (a, b) => b);
 }
 
 function bombaEncendida() {
@@ -309,10 +353,10 @@ function velEn(x, y, z, out) {
 
 function planoCorte() {
   const p = geo.pos_bomba;
-  if (est.corte === "largo") return { o: [0, p[1]], h: [1, 0], n: [0, 1], h0: 0, h1: cfg.largo };
+  if (est.corte === "largo") return { o: [0, p[1]], h: [1, 0], n: [0, 1], h0: 0, h1: cfgV.largo };
   const [hx, hy] = geo.plano_chorro;
   let h0 = -Infinity, h1 = Infinity;
-  for (const [p0, d, L] of [[p[0], hx, cfg.largo], [p[1], hy, cfg.ancho]]) {
+  for (const [p0, d, L] of [[p[0], hx, cfgV.largo], [p[1], hy, cfgV.ancho]]) {
     if (Math.abs(d) > 1e-9) {
       const a = -p0 / d, b = (L - p0) / d;
       h0 = Math.max(h0, Math.min(a, b));
@@ -329,7 +373,7 @@ function proy(pc, x, y) {
 
 function operacion() {
   try {
-    return puntoOperacion(cfg.q_max_lh, cfg.h_max_m, cfg.boquilla_mm, cfg.salida_mm, cfg.k_salida);
+    return puntoOperacion(cfgV.q_max_lh, cfgV.h_max_m, cfgV.boquilla_mm, cfgV.salida_mm, cfgV.k_salida);
   } catch {
     return null;
   }
@@ -338,8 +382,8 @@ function operacion() {
 function rayoChorro(g = geo) {
   const p = g.pos_bomba, d = g.dir_chorro;
   let t = Infinity, donde = "pared";
-  const planos = [[0, 0, "pared"], [0, cfg.largo, "pared"], [1, 0, "pared"], [1, cfg.ancho, "pared"],
-    [2, 0, "fondo"], [2, cfg.nivel, "superficie"]];
+  const planos = [[0, 0, "pared"], [0, cfgV.largo, "pared"], [1, 0, "pared"], [1, cfgV.ancho, "pared"],
+    [2, 0, "fondo"], [2, cfgV.nivel, "superficie"]];
   for (const [eje, val, tipo] of planos) {
     if (Math.abs(d[eje]) < 1e-9) continue;
     const ti = (val - p[eje]) / d[eje];
@@ -349,12 +393,12 @@ function rayoChorro(g = geo) {
     }
   }
   const fin = [p[0] + d[0] * t, p[1] + d[1] * t, p[2] + d[2] * t];
-  const r = [cfg.pozo[0] - p[0], cfg.pozo[1] - p[1], cfg.pozo[2] - p[2]];
+  const r = [cfgV.pozo[0] - p[0], cfgV.pozo[1] - p[1], cfgV.pozo[2] - p[2]];
   const tc = clamp(r[0] * d[0] + r[1] * d[1] + r[2] * d[2], 0, t);
   const dist = Math.hypot(r[0] - d[0] * tc, r[1] - d[1] * tc, r[2] - d[2] * tc);
   const op = operacion();
   // Chorro redondo libre: u_eje = 6.2 u0 d / x (estimación, vale lejos de la boquilla).
-  const uFin = op ? Math.min(op.u_ms, 6.2 * op.u_ms * (cfg.boquilla_mm / 1000) / t) : 0;
+  const uFin = op ? Math.min(op.u_ms, 6.2 * op.u_ms * (cfgV.boquilla_mm / 1000) / t) : 0;
   return { t, fin, donde, dist, tc, uFin };
 }
 
@@ -363,20 +407,43 @@ function resumenCfg() {
   const op = operacion();
   const az = Math.round(Math.atan2(d[1], d[0]) / RAD);
   const el = Math.round(Math.asin(clamp(d[2], -1, 1)) / RAD);
-  const bomba = cfg.pos_bomba
+  const bomba = cfgV.pos_bomba
     ? `libre (${p[0].toFixed(2)}, ${p[1].toFixed(2)}) a ${cm(p[2])} cm`
-    : `mástil ${cfg.angulo_tubo}° a ${cm(p[2])} cm`;
-  const chorro = `${az}° / ${el}° · ${cfg.boquilla_mm} mm · ${op ? Math.round(op.q_lh) : "-"} L/h`;
-  const lugar = Array.isArray(cfg.lugar_dosis)
-    ? `(${cfg.lugar_dosis[0].toFixed(2)}, ${cfg.lugar_dosis[1].toFixed(2)})`
-    : cfg.lugar_dosis === "mastil" ? "boca" : "flotador";
+    : `mástil ${cfgV.angulo_tubo}° a ${cm(p[2])} cm`;
+  const chorro = `${az}° / ${el}° · ${cfgV.boquilla_mm} mm · ${op ? Math.round(op.q_lh) : "-"} L/h`;
+  const lugar = Array.isArray(cfgV.lugar_dosis)
+    ? `(${cfgV.lugar_dosis[0].toFixed(2)}, ${cfgV.lugar_dosis[1].toFixed(2)})`
+    : cfgV.lugar_dosis === "mastil" ? "boca" : "flotador";
   const formula = op ? tiempoMezclaS(volumen(), op.m_m4s2) / 60 : null;
-  return { bomba, chorro, dosis: `${cfg.dosis_ml} mL, ${lugar}`, formula };
+  const consumos = [cfgV.consumo_lpm];
+  return {
+    bomba, chorro, dosis: `${cfgV.dosis_ml} mL, ${lugar}`, formula, nivel: cfgV.nivel, consumos,
+    agua: textoAgua(cfgV.nivel, consumos), malla: `${Math.round(cfgV.dx * 100)} cm`,
+  };
+}
+
+// Nivel y consumo de la casa de una corrida; si el consumo cambió a media corrida, todos los valores.
+function textoAgua(nivel, consumos) {
+  return `${cm(nivel)} cm, ${consumos.join(" y luego ")} L/min`;
 }
 
 function dosisJuntoAlFlotador() {
-  const pd = geo.punto_dosis, ll = cfg.llenado;
+  const pd = geo.punto_dosis, ll = cfgV.llenado;
   return Math.hypot(pd[0] - ll[0], pd[1] - ll[1]) < JUNTOS_M;
+}
+
+// El chorro proyectado en el plano del corte: dh a lo largo, d2 vertical y dn hacia el fondo de la
+// vista (quien mira el corte está del lado -n).
+function chorroEnCorte(pc = planoCorte()) {
+  const d = geo.dir_chorro;
+  const dh = d[0] * pc.h[0] + d[1] * pc.h[1];
+  const enPlano = Math.hypot(dh, d[2]);
+  return { dh, d2: d[2], dn: d[0] * pc.n[0] + d[1] * pc.n[1], enPlano, deFrente: enPlano < DE_FRENTE };
+}
+
+// Con la bomba en el mástil más abajo que la sonda ORP, el tubo sigue hasta la bomba.
+function zFinMastil() {
+  return cfgV.pos_bomba ? cfgV.z_orp : Math.min(cfgV.z_orp, geo.pos_bomba[2]);
 }
 
 // ---------- vistas ----------
@@ -408,7 +475,7 @@ function dimensiona(v) {
   let esc, h;
   if (v.tipo === "planta") {
     const m = { l: 14, r: 46, t: 14, b: 50 };
-    const ew = cfg.largo + 2 * MURO, eh = cfg.ancho + 2 * MURO;
+    const ew = cfgV.largo + 2 * MURO, eh = cfgV.ancho + 2 * MURO;
     esc = (w - m.l - m.r) / ew;
     h = m.t + m.b + eh * esc;
     if (h > hMax) {
@@ -416,7 +483,7 @@ function dimensiona(v) {
       h = hMax;
     }
     const ox = m.l + (w - m.l - m.r - ew * esc) / 2 + MURO * esc;
-    const W = cfg.ancho;
+    const W = cfgV.ancho;
     v.X = (x) => ox + x * esc;
     v.Y = (y) => m.t + (W + MURO - y) * esc;
     v.inv = (px, py) => [(px - ox) / esc, W + MURO - (py - m.t) / esc];
@@ -427,7 +494,7 @@ function dimensiona(v) {
     v.clavePlano = clave;
     v.pc = pc;
     const m = { l: 30, r: 52, t: 8, b: 50 };
-    const zTop = cfg.z_tapa + LOSA + 0.30, zBot = -MURO;
+    const zTop = cfgV.z_tapa + LOSA + 0.30, zBot = -MURO;
     const ew = pc.h1 - pc.h0 + 2 * MURO, eh = zTop - zBot;
     esc = (w - m.l - m.r) / ew;
     h = m.t + m.b + eh * esc;
@@ -547,6 +614,29 @@ function marcaDosis(c, x, y) {
   c.strokeStyle = T.tinta;
   c.lineWidth = 1.4;
   c.stroke();
+}
+
+// La Mibee vista desde la boquilla o desde atrás: un círculo con punto si el chorro viene hacia quien
+// mira y con tache si se aleja.
+function mibeeDeFrente(c, x, y, esc, haciaTi) {
+  const r = Math.max((MIBEE.diam / 2) * esc, 7);
+  c.beginPath();
+  c.arc(x, y, r, 0, Math.PI * 2);
+  c.fillStyle = T.acento;
+  c.fill();
+  c.strokeStyle = T.tinta;
+  c.lineWidth = 1;
+  c.stroke();
+  if (haciaTi) {
+    c.beginPath();
+    c.arc(x, y, Math.max(2, r * 0.3), 0, Math.PI * 2);
+    c.fillStyle = T.papel;
+    c.fill();
+  } else {
+    const q = r * 0.5;
+    trazo(c, [[x - q, y - q], [x + q, y + q]], T.papel, 1.8);
+    trazo(c, [[x - q, y + q], [x + q, y - q]], T.papel, 1.8);
+  }
 }
 
 function tache(c, x, y, color) {
@@ -855,7 +945,7 @@ function overlayPlanta(v) {
   const c = limpiaOverlay(v);
   const { X, Y, esc } = v;
   const R = creaRotulos(c, v.w, v.h, tamRotulo(v));
-  const L = cfg.largo, W = cfg.ancho;
+  const L = cfgV.largo, W = cfgV.ancho;
   const ray = rayoChorro();
   const avisoRejilla = ray.dist < DIST_REJILLA;
 
@@ -882,7 +972,7 @@ function overlayPlanta(v) {
   }
 
   // Boca de la tapa (arriba del plano de corte: línea oculta) y travesaño
-  const [bx, by] = cfg.boca;
+  const [bx, by] = cfgV.boca;
   trazo(c, [[X(bx - BOCA / 2), Y(by - BOCA / 2)], [X(bx + BOCA / 2), Y(by - BOCA / 2)], [X(bx + BOCA / 2), Y(by + BOCA / 2)],
     [X(bx - BOCA / 2), Y(by + BOCA / 2)], [X(bx - BOCA / 2), Y(by - BOCA / 2)]], T.tinta2, 1, [6, 4]);
   const [rx, ry] = geo.rumbo;
@@ -891,7 +981,7 @@ function overlayPlanta(v) {
   R.linea(...trav, 3, 1);
 
   // Zona a evitar alrededor de la rejilla
-  const [px, py] = cfg.pozo;
+  const [px, py] = cfgV.pozo;
   c.beginPath();
   c.arc(X(px), Y(py), DIST_REJILLA * esc, 0, Math.PI * 2);
   c.strokeStyle = avisoRejilla ? T.peligro : T.tinta3;
@@ -901,7 +991,7 @@ function overlayPlanta(v) {
   c.setLineDash([]);
 
   // Flotador: tubo desde la pared más cercana
-  const [lx, ly] = cfg.llenado;
+  const [lx, ly] = cfgV.llenado;
   const dists = [ly, W - ly, lx, L - lx];
   const kp = dists.indexOf(Math.min(...dists));
   const ent = kp === 0 ? [lx, -MURO] : kp === 1 ? [lx, W + MURO] : kp === 2 ? [-MURO, ly] : [L + MURO, ly];
@@ -932,9 +1022,10 @@ function overlayPlanta(v) {
   c.stroke();
 
   // Mástil y sonda ORP
-  const punta = geo.punto_tubo(cfg.z_orp);
-  trazo(c, [[X(bx), Y(by)], [X(punta[0]), Y(punta[1])]], T.tinta2, Math.max(2.5, TUBO * esc));
-  R.linea(X(bx), Y(by), X(punta[0]), Y(punta[1]), 3, 1.5);
+  const punta = geo.punto_tubo(cfgV.z_orp);
+  const finTubo = geo.punto_tubo(zFinMastil());
+  trazo(c, [[X(bx), Y(by)], [X(finTubo[0]), Y(finTubo[1])]], T.tinta2, Math.max(2.5, TUBO * esc));
+  R.linea(X(bx), Y(by), X(finTubo[0]), Y(finTubo[1]), 3, 1.5);
   marcaSonda(c, X(punta[0]), Y(punta[1]), T.s[2]);
   marcaSonda(c, X(bx), Y(by), T.s[0]);
   R.punto(X(bx), Y(by), 6, 3);
@@ -948,7 +1039,7 @@ function overlayPlanta(v) {
 
   // Bomba de mezcla, chorro y amarre libre
   const pb = geo.pos_bomba, d = geo.dir_chorro;
-  if (cfg.pos_bomba) {
+  if (cfgV.pos_bomba) {
     trazo(c, [[X(bx), Y(by)], [X(pb[0]), Y(pb[1])]], T.acento, 1.2, [5, 4]);
     R.linea(X(bx), Y(by), X(pb[0]), Y(pb[1]), 2, 0.5);
   }
@@ -956,13 +1047,18 @@ function overlayPlanta(v) {
   trazo(c, [[X(pb[0]), Y(pb[1])], [X(ray.fin[0]), Y(ray.fin[1])]], colorRayo, 1.2, [2, 4]);
   R.linea(X(pb[0]), Y(pb[1]), X(ray.fin[0]), Y(ray.fin[1]), 2, 0.3);
   tache(c, X(ray.fin[0]), Y(ray.fin[1]), colorRayo);
+  // Largo proporcional a lo que el chorro avanza en planta, con un mínimo para alcanzar la perilla.
+  // Casi vertical: la bomba se ve de frente y la perilla queda en una línea punteada sin punta.
   const nh = Math.hypot(d[0], d[1]);
   const az = Math.atan2(d[1], d[0]);
-  const lf = Math.max(0.5 * nh, 0.24);
+  const deFrente = nh < DE_FRENTE;
+  const lf = Math.max(0.5 * nh, 30 / esc);
   const tip = [pb[0] + Math.cos(az) * lf, pb[1] + Math.sin(az) * lf];
-  flecha(c, X(pb[0]), Y(pb[1]), X(tip[0]), Y(tip[1]), T.acento, 2.5, 10);
+  if (deFrente) trazo(c, [[X(pb[0]), Y(pb[1])], [X(tip[0]), Y(tip[1])]], T.acento, 1.2, [2, 3]);
+  else flecha(c, X(pb[0]), Y(pb[1]), X(tip[0]), Y(tip[1]), T.acento, 2.5, 10);
   R.linea(X(pb[0]), Y(pb[1]), X(tip[0]), Y(tip[1]), 4, 2);
-  cuerpoMibee(c, X(pb[0]), Y(pb[1]), -az, esc);
+  if (deFrente) mibeeDeFrente(c, X(pb[0]), Y(pb[1]), esc, d[2] > 0);
+  else cuerpoMibee(c, X(pb[0]), Y(pb[1]), -az, esc);
   manija(v, "bomba", X(pb[0]), Y(pb[1]), 15);
   c.beginPath();
   c.arc(X(tip[0]), Y(tip[1]), 7, 0, Math.PI * 2);
@@ -1018,7 +1114,7 @@ function overlayPlanta(v) {
     const etq = ray.donde === "fondo" ? "pega en el fondo" : ray.donde === "superficie" ? "sale arriba" : "pega en la pared";
     R.pide(etq, X(ray.fin[0]), Y(ray.fin[1]), { r: 7, color: colorRayo, prio: 5 });
     R.pide("boca", X(bx - BOCA / 2), Y(by + BOCA / 2), { r: 2, prio: 4, pref: ["no", "n", "o", "ne"] });
-    R.pide(`mástil ${cfg.angulo_tubo}°`, X((bx + punta[0]) / 2), Y((by + punta[1]) / 2), { r: 4, prio: 3 });
+    R.pide(`mástil ${cfgV.angulo_tubo}°`, X((bx + finTubo[0]) / 2), Y((by + finTubo[1]) / 2), { r: 4, prio: 3 });
   }
   R.resuelve();
   rotulosVista.planta = R;
@@ -1032,13 +1128,13 @@ function overlayCorte(v) {
   const R = creaRotulos(c, v.w, v.h, tamRotulo(v));
   const pc = v.pc = planoCorte();
   const { h0, h1 } = pc;
-  const zt = cfg.z_tapa, N = cfg.nivel;
+  const zt = cfgV.z_tapa, N = cfgV.nivel;
   const ray = rayoChorro();
   const avisoRejilla = ray.dist < DIST_REJILLA;
   const P = (x, y) => proy(pc, x, y);
 
   // Muros, fondo y tapa con la boca
-  const [hb] = P(cfg.boca[0], cfg.boca[1]);
+  const [hb] = P(cfgV.boca[0], cfgV.boca[1]);
   const b0 = clamp(hb - BOCA / 2, h0, h1), b1 = clamp(hb + BOCA / 2, h0, h1);
   c.beginPath();
   c.rect(X(h0 - MURO), Y(0), (h1 - h0 + 2 * MURO) * esc, MURO * esc);
@@ -1070,8 +1166,8 @@ function overlayCorte(v) {
   R.tapa(X(hn) - 8, Y(N) - 11, X(hn) + 8, Y(N) + 9, 3);
 
   // Bomba de pozo colgando con su rejilla
-  const [pp, pdist] = P(cfg.pozo[0], cfg.pozo[1]);
-  const zr = cfg.pozo[2];
+  const [pp, pdist] = P(cfgV.pozo[0], cfgV.pozo[1]);
+  const zr = cfgV.pozo[2];
   const lejos = Math.abs(pdist) > 0.3;
   c.globalAlpha = lejos ? 0.45 : 1;
   const r = Math.max(4, (POZO_DIAM / 2) * esc);
@@ -1091,7 +1187,7 @@ function overlayCorte(v) {
   R.punto(X(pp) + r + 8, Y(zr), 6, 3);
 
   // Flotador
-  const [hl] = P(cfg.llenado[0], cfg.llenado[1]);
+  const [hl] = P(cfgV.llenado[0], cfgV.llenado[1]);
   const zv = Math.min(zt - 0.06, N + 0.10);
   const lado = hl - h0 < h1 - hl ? -1 : 1;
   const hw = lado < 0 ? h0 - MURO : h1 + MURO;
@@ -1107,18 +1203,20 @@ function overlayCorte(v) {
   c.strokeStyle = T.tinta;
   c.lineWidth = 1.3;
   c.stroke();
-  if (cfg.consumo_lpm > 0) trazo(c, [[X(hlc), Y(zv)], [X(hlc), Y(N)]], T.agua, 1.5, [3, 3]);
+  if (cfgV.consumo_lpm > 0) trazo(c, [[X(hlc), Y(zv)], [X(hlc), Y(N)]], T.agua, 1.5, [3, 3]);
   R.linea(X(hw), Y(zv), X(hlc), Y(zv), 2, 1);
   R.linea(X(hlc), Y(zv), X(bola[0]), Y(bola[1]), 2, 1);
 
   // Mástil, travesaño y sondas
-  const punta = geo.punto_tubo(cfg.z_orp);
+  const punta = geo.punto_tubo(cfgV.z_orp);
   const [ht] = P(punta[0], punta[1]);
+  const zFin = zFinMastil(), finTubo = geo.punto_tubo(zFin);
+  const [hft] = P(finTubo[0], finTubo[1]);
   c.fillStyle = T.tinta2;
   c.fillRect(X(hb) - 3, Y(zt) - 3, 6, 6);
-  trazo(c, [[X(hb), Y(zt)], [X(ht), Y(cfg.z_orp)]], T.tinta2, Math.max(2.5, TUBO * esc));
-  R.linea(X(hb), Y(zt), X(ht), Y(cfg.z_orp), 3, 1.5);
-  marcaSonda(c, X(ht), Y(cfg.z_orp), T.s[2]);
+  trazo(c, [[X(hb), Y(zt)], [X(hft), Y(zFin)]], T.tinta2, Math.max(2.5, TUBO * esc));
+  R.linea(X(hb), Y(zt), X(hft), Y(zFin), 3, 1.5);
+  marcaSonda(c, X(ht), Y(cfgV.z_orp), T.s[2]);
   marcaSonda(c, X(hb), Y(N - 0.10), T.s[0]);
   R.punto(X(hb), Y(N - 0.10), 6, 3);
 
@@ -1130,24 +1228,29 @@ function overlayCorte(v) {
   R.punto(dosisXY[0], dosisXY[1] - 2, 7, 3);
 
   // Bomba de mezcla, chorro y cotas de altura
-  const pb = geo.pos_bomba, d = geo.dir_chorro;
+  const pb = geo.pos_bomba;
   const [hp] = P(pb[0], pb[1]);
-  const dh = d[0] * pc.h[0] + d[1] * pc.h[1];
-  if (cfg.pos_bomba) trazo(c, [[X(hb), Y(zt)], [X(hp), Y(pb[2])]], T.acento, 1.2, [5, 4]);
+  const { dh, d2, dn, deFrente } = chorroEnCorte(pc);
+  if (cfgV.pos_bomba) trazo(c, [[X(hb), Y(zt)], [X(hp), Y(pb[2])]], T.acento, 1.2, [5, 4]);
   const [hf] = P(ray.fin[0], ray.fin[1]);
   const colorRayo = avisoRejilla || ray.donde === "fondo" ? T.peligro : T.acento;
   trazo(c, [[X(hp), Y(pb[2])], [X(hf), Y(ray.fin[2])]], colorRayo, 1.2, [2, 4]);
   R.linea(X(hp), Y(pb[2]), X(hf), Y(ray.fin[2]), 2, 0.3);
   tache(c, X(hf), Y(ray.fin[2]), colorRayo);
   R.punto(X(hf), Y(ray.fin[2]), 6, 3);
-  const nd = Math.hypot(dh, d[2]) || 1;
+  // Largo proporcional a la proyección del chorro en el corte. Si sale casi de frente, la bomba se ve
+  // de frente (punto si viene hacia quien mira, tache si se aleja) y el pie de la vista lo explica.
   const lf = 0.45;
-  const tip = [hp + (dh / nd) * lf, pb[2] + (d[2] / nd) * lf];
-  flecha(c, X(hp), Y(pb[2]), X(tip[0]), Y(tip[1]), T.acento, 2.5, 10);
-  R.linea(X(hp), Y(pb[2]), X(tip[0]), Y(tip[1]), 4, 2);
-  cuerpoMibee(c, X(hp), Y(pb[2]), -Math.atan2(d[2], dh), esc);
+  const tip = [hp + dh * lf, pb[2] + d2 * lf];
+  if (deFrente) {
+    mibeeDeFrente(c, X(hp), Y(pb[2]), esc, dn < 0);
+  } else {
+    flecha(c, X(hp), Y(pb[2]), X(tip[0]), Y(tip[1]), T.acento, 2.5, 10);
+    R.linea(X(hp), Y(pb[2]), X(tip[0]), Y(tip[1]), 4, 2);
+    cuerpoMibee(c, X(hp), Y(pb[2]), -Math.atan2(d2, dh), esc);
+  }
   manija(v, "bomba-z", X(hp), Y(pb[2]), 15);
-  if (est.corte === "chorro") {
+  if (est.corte === "chorro" && !deFrente) {
     c.beginPath();
     c.arc(X(tip[0]), Y(tip[1]), 7, 0, Math.PI * 2);
     c.fillStyle = T.papel;
@@ -1169,7 +1272,7 @@ function overlayCorte(v) {
     const xsDe = (x0, ds, primero, xRef0 = x0, hueco = 0) => ds.flatMap((d) => [primero, -primero]
       .map((s) => [x0 + s * (d + hueco), s, xRef0 + s * hueco]));
     cotaVMovil(R, String(cm(pb[2])), Y(pb[2]), Y(0), X(hp), xsDe(X(hp), [18, 32, 46, 60], ladoB), T.acento, 3);
-    cotaVMovil(R, String(cm(cfg.z_orp)), Y(cfg.z_orp), Y(0), X(ht), xsDe(X(ht), [14, 28, 42, 56], ht >= hp ? 1 : -1), T.s[2], 2);
+    cotaVMovil(R, String(cm(cfgV.z_orp)), Y(cfgV.z_orp), Y(0), X(ht), xsDe(X(ht), [14, 28, 42, 56], ht >= hp ? 1 : -1), T.s[2], 2);
     cotaVMovil(R, String(cm(zr)), Y(zr), Y(0), X(pp), xsDe(X(pp), [12, 26, 40], -1, X(pp), r), T.tinta2, 1);
     const txtLargo = est.corte === "largo" ? String(cm(h1 - h0)) : `${cm(h1 - h0)} por el chorro`;
     cotaH(c, R, X(h0), X(h1), Y(-MURO) + 18, txtLargo, T.tinta2, Y(-MURO) + 2);
@@ -1187,7 +1290,7 @@ function overlayCorte(v) {
     R.pide(juntos ? "flotador y dosis" : "flotador", X(bola[0]), Y(N), { r: rBola + 2, prio: 7, pref: ["n", "ne", "no", "e", "o"] });
     if (!juntos) R.pide("dosis", dosisXY[0], dosisXY[1] - 2, { r: 8, prio: 6 });
     R.pide("boca", X(hb), Y(zt + LOSA), { r: 3, prio: 6, pref: ["n", "ne", "no"] });
-    R.pide("sonda ORP", X(ht), Y(cfg.z_orp), { r: 7, prio: 6, pref: ["e", "o", "se", "ne"] });
+    R.pide("sonda ORP", X(ht), Y(cfgV.z_orp), { r: 7, prio: 6, pref: ["e", "o", "se", "ne"] });
     R.pide(est.capas.cotas ? "nivel" : `nivel ${cm(N)}`, X(hn), Y(N) - 6, { r: 7, color: T.agua, prio: 5, pref: ["o", "no", "e", "ne"] });
     if (ray.donde === "fondo") R.pide("pega en el fondo", X(hf), Y(ray.fin[2]), { r: 7, color: colorRayo, prio: 5, pref: ["n", "ne", "no"] });
   }
@@ -1567,6 +1670,12 @@ function pasoBonito(x) {
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
 }
 
+// Decimales justos para las marcas de un paso (0.25 lleva dos), y al menos uno.
+function decimales(paso) {
+  for (let d = 1; d < 4; d++) if (Math.abs(paso * 10 ** d - Math.round(paso * 10 ** d)) < 1e-6) return d;
+  return 4;
+}
+
 function dibujaGrafica() {
   const c = graf.ctx, { w, h, m } = graf;
   if (!w) return;
@@ -1576,7 +1685,7 @@ function dibujaGrafica() {
   if (!serie || !serie.t.length) return;
   const n = serie.t.length;
   // Escala: al menos el doble de la meta y lo bastante para que las sondas no se corten (hasta 4 veces).
-  const cfMax = Math.max(...serie.meta, 0.01);
+  const cfMax = Math.max(serie.cfMax, 0.01);
   let sMax = 0;
   for (const s of serie.s) for (const y of s) if (y > sMax) sMax = y;
   const yMax = clamp(sMax * 1.08, 2 * cfMax, 4 * cfMax);
@@ -1589,10 +1698,11 @@ function dibujaGrafica() {
   const Y = (y) => m.t + (1 - Math.min(y, yMax) / yMax) * (h - m.t - m.b);
   graf.X = X;
 
-  const yp = pasoBonito(yMax / 4);
-  for (let y = 0; y <= yMax + 1e-9; y += yp) {
+  const yp = pasoBonito(yMax / 4), dec = decimales(yp);
+  for (let i = 0; i * yp <= yMax + 1e-9; i++) {
+    const y = i * yp;
     trazo(c, [[m.l, Y(y)], [w - m.r, Y(y)]], T.linea, 1);
-    texto(c, y.toFixed(yp < 0.1 ? 2 : 1), m.l - 6, Y(y), { tam: 11, mono: true, alinea: "right", color: T.tinta2, halo: false });
+    texto(c, y.toFixed(dec), m.l - 6, Y(y), { tam: 11, mono: true, alinea: "right", color: T.tinta2, halo: false });
   }
   for (let t = 0; t <= xMax; t += xp) {
     texto(c, String(t), X(t), h - m.b + 12, { tam: 11, mono: true, alinea: "center", color: T.tinta2, halo: false });
@@ -1723,7 +1833,9 @@ function pintaLecturas() {
     pon("l-cov", `${st.cov.toFixed(2)}<span class="chip ${ok ? "ok" : "no"}">${ok ? "mezclada" : "falta"}</span>`);
     pon("l-rango", `${Math.round(st.cmin * 100)} a ${Math.round(st.cmax * 100)} <small>%</small>`);
   }
-  pon("l-meta", `${cf.toFixed(2)} <small>mg/L</small>`);
+  // Con consumo sale cloro y entra agua sin cloro: la meta (dosis entre volumen) ya no se alcanza.
+  const conConsumo = (cfgActiva ?? cfgV).consumo_lpm > 0;
+  pon("l-meta", `${cf.toFixed(2)} <small>mg/L${conConsumo ? " sin consumo" : ""}</small>`);
   if (so) {
     Object.keys(so).slice(0, 3).forEach((n, k) => pon(`l-s${k}`, `${so[n].toFixed(2)} <small>mg/L</small>`));
   }
@@ -1744,13 +1856,13 @@ function pintaLecturas() {
   pon("l-sim5", deteccion.cov5 != null ? fmtMin(deteccion.cov5) : `<small>aún no</small>`);
   pon("l-sim10", deteccion.todo10 != null ? fmtMin(deteccion.todo10) : `<small>aún no</small>`);
   const pb = geo.pos_bomba;
-  if (cfg.pos_bomba) {
-    const hdist = Math.hypot(pb[0] - cfg.boca[0], pb[1] - cfg.boca[1]);
-    const dz = cfg.z_tapa - pb[2];
+  if (cfgV.pos_bomba) {
+    const hdist = Math.hypot(pb[0] - cfgV.boca[0], pb[1] - cfgV.boca[1]);
+    const dz = cfgV.z_tapa - pb[2];
     pon("l-montaje", `tubo de ${Math.hypot(hdist, dz).toFixed(2)} m a ${Math.round(Math.atan2(dz, hdist) / RAD)}° <small>desde el travesaño</small>`);
   } else {
-    const ltubo = (cfg.z_tapa - pb[2]) / Math.sin(cfg.angulo_tubo * RAD);
-    pon("l-montaje", `mástil a ${cfg.angulo_tubo}°, bomba a ${ltubo.toFixed(2)} m <small>del travesaño por el tubo</small>`);
+    const ltubo = (cfgV.z_tapa - pb[2]) / Math.sin(cfgV.angulo_tubo * RAD);
+    pon("l-montaje", `mástil a ${cfgV.angulo_tubo}°, bomba a ${ltubo.toFixed(2)} m <small>del travesaño por el tubo</small>`);
   }
   $("reloj-t").textContent = `${(sim.t / 60).toFixed(1)} min`;
   const v = perf.vSim;
@@ -1792,7 +1904,7 @@ function pintaAvisos() {
 function pintaCorridas() {
   const celda = (r, x) => x != null ? `${x.toFixed(1)} min` : r.activa ? "corriendo" : `&gt; ${r.tMax.toFixed(0)} min`;
   pon("corridas", corridas.map((r) => `<tr class="${r === corrida ? "actual" : ""}">
-    <td class="num">${r.n}</td><td>${r.bomba}</td><td>${r.chorro}</td><td>${r.dosis}</td>
+    <td class="num">${r.n}</td><td>${r.bomba}</td><td>${r.chorro}</td><td>${r.agua}</td><td class="num">${r.malla}</td><td>${r.dosis}</td>
     <td class="num">${r.formula != null ? r.formula.toFixed(1) + " min" : "-"}</td>
     <td class="num">${celda(r, r.cov5)}</td><td class="num">${celda(r, r.todo10)}</td></tr>`).join(""));
 }
@@ -1800,9 +1912,10 @@ function pintaCorridas() {
 // ---------- controles ----------
 
 function efectivos() {
-  const d = geo.dir_chorro;
+  const g = geoEd();
+  const d = g.dir_chorro;
   return {
-    altura: geo.pos_bomba[2],
+    altura: g.pos_bomba[2],
     az: Math.round(Math.atan2(d[1], d[0]) / RAD),
     el: Math.round(Math.asin(clamp(d[2], -1, 1)) / RAD),
   };
@@ -1826,8 +1939,22 @@ const rangos = {
 };
 
 function cambiaConsumo() {
-  motor?.manda({ tipo: "consumo", consumo_lpm: cfg.consumo_lpm });
-  for (const v of Object.values(vistas)) v.sucio = true;
+  if (!motor || !cfgActiva) return;
+  // El motor aplica el consumo sobre la config que corre, así que se valida contra esa.
+  const e = valida({ ...cfgActiva, consumo_lpm: cfg.consumo_lpm });
+  if (e) {
+    errorCfg = e;
+    pintaAvisos();
+    return;
+  }
+  if (cfgActiva.consumo_lpm !== cfg.consumo_lpm && corrida?.activa) {
+    corrida.consumos.push(cfg.consumo_lpm);
+    corrida.agua = textoAgua(corrida.nivel, corrida.consumos);
+  }
+  cfgActiva.consumo_lpm = cfg.consumo_lpm;
+  motor.manda({ tipo: "consumo", consumo_lpm: cfg.consumo_lpm });
+  cambioCfg({ reinicia: false });
+  pintaCorridas();
 }
 
 function syncControles() {
@@ -1836,6 +1963,7 @@ function syncControles() {
     if (document.activeElement !== $(id)) $(id).value = v;
     $(`o-${id}`).textContent = r.fmt(v);
   }
+  $("altura").min = cm(ALTURA_MIN);
   $("altura").max = Math.max(20, cm(cfg.nivel) - 10);
   $("estado-montaje").textContent = cfg.pos_bomba ? "libre" : "en el mástil";
   $("montar").disabled = !cfg.pos_bomba;
@@ -1844,13 +1972,23 @@ function syncControles() {
   $("ancho").value = cm(cfg.ancho);
   $("ztapa").value = cm(cfg.z_tapa);
   $("zrejilla").value = cm(cfg.pozo[2]);
-  $("z-planta").max = Math.max(10, cm(cfg.nivel) - 5);
+  // La planta "a una altura" muestra el agua que se simula: no puede quedar arriba de su nivel.
+  const zMax = Math.max(10, cm(cfgV.nivel) - 5);
+  $("z-planta").max = zMax;
+  if (cm(est.zPlanta) > zMax) {
+    est.zPlanta = zMax / 100;
+    $("z-planta").value = zMax;
+    $("o-z-planta").textContent = `${zMax} cm`;
+    vistas.planta.P = null;
+    vistas.planta.flechas = null;
+    fondoSucio = true;
+  }
   $("d-volumen").textContent = `${volumen().toFixed(1)} m³`;
 }
 
-function valida() {
+function valida(c = cfg) {
   try {
-    validar(copia(cfg));
+    validar(copia(c));
     return null;
   } catch (e) {
     return e.message;
@@ -1858,15 +1996,24 @@ function valida() {
 }
 
 function cambioCfg({ reinicia = true } = {}) {
-  geo = geometria(copia(cfg));
+  cfg.lugar_dosis = enSuperficie(cfg.lugar_dosis, cfg.nivel);
+  errorCfg = valida();
+  const antes = cfgV;
+  cfgV = cfgDeVista();
+  geo = geometria(copia(cfgV));
   for (const v of Object.values(vistas)) v.sucio = true;
   dimensiona(vistas.corte);
+  if (cfgV.largo !== antes.largo || cfgV.ancho !== antes.ancho) dimensiona(vistas.planta);
   syncControles();
-  errorCfg = valida();
   pintaAvisos();
   pintaLecturas();
   pintaSubtitulos();
-  if (reinicia && !errorCfg) programaReinicio();
+  if (errorCfg) {
+    clearTimeout(timerReinicio);
+    timerReinicio = 0;
+  } else if (reinicia) {
+    programaReinicio();
+  }
 }
 
 function programaReinicio() {
@@ -1896,9 +2043,20 @@ for (const [id, clave, idx] of [["largo", "largo"], ["ancho", "ancho"], ["ztapa"
     if (!(v > 0)) return syncControles();
     if (idx != null) cfg[clave] = cfg[clave].map((q, i) => (i === idx ? v : q));
     else cfg[clave] = v;
+    if (clave === "largo" || clave === "ancho") recortaPiezas();
     cambioCfg();
     redimensiona();
   });
+}
+
+// Al achicar la cisterna, la boca, la bomba de pozo y el flotador se recorren para quedar adentro,
+// con los mismos márgenes que al arrastrarlos.
+function recortaPiezas() {
+  const L = cfg.largo, W = cfg.ancho;
+  cfg.boca = [r2(clamp(cfg.boca[0], 0.3, L - 0.3)), r2(clamp(cfg.boca[1], 0.3, W - 0.3))];
+  for (const k of ["pozo", "llenado"]) {
+    cfg[k] = [r2(clamp(cfg[k][0], 0.05, L - 0.05)), r2(clamp(cfg[k][1], 0.05, W - 0.05)), cfg[k][2]];
+  }
 }
 
 $("medidas-doc").addEventListener("click", () => {
@@ -2004,11 +2162,15 @@ function pintaSubtitulos() {
   $("t-planta-sub").textContent = est.planta === "promedio" ? "promedio de toda la columna" : `a ${Math.round(est.zPlanta * 100)} cm del fondo`;
   const p = geo.pos_bomba;
   $("t-corte-sub").textContent = est.corte === "largo" ? `A-A a lo largo, y = ${cm(p[1])} cm` : "A-A por el plano del chorro";
-  const [, pd] = proy(planoCorte(), cfg.pozo[0], cfg.pozo[1]);
+  const [, pd] = proy(planoCorte(), cfgV.pozo[0], cfgV.pozo[1]);
   $("pie-corte").textContent = (est.corte === "largo"
     ? "Corte a lo largo por la bomba de mezcla."
     : "Corte por el plano del chorro: arrastra la punta de la flecha para inclinarlo.")
     + " Arrastra la bomba para subirla o bajarla. Partículas a ±25 cm del corte."
+    + (est.corte === "largo" && chorroEnCorte().deFrente
+      ? (chorroEnCorte().dn < 0 ? " El chorro sale casi de frente, hacia quien mira (punto sobre la bomba)" : " El chorro se aleja casi de frente (tache sobre la bomba)")
+        + ": velo completo en Plano del chorro."
+      : "")
     + (Math.abs(pd) > 0.3 ? ` La bomba de pozo queda a ${cm(Math.abs(pd))} cm del corte y se ve tenue.` : "");
   let pie;
   if (est.editar) pie = "Editando: arrastra los cuadros de la boca, la bomba de pozo y el flotador.";
@@ -2042,7 +2204,7 @@ function aplicaArrastre(v, m, px, py) {
   const xy = () => [r2(clamp(a, 0.05, L - 0.05)), r2(clamp(b, 0.05, W - 0.05))];
   switch (m.id) {
     case "bomba": {
-      const z = geo.pos_bomba[2];
+      const z = geoEd().pos_bomba[2];
       cfg.pos_bomba = [...xy(), z];
       break;
     }
@@ -2061,7 +2223,7 @@ function aplicaArrastre(v, m, px, py) {
       cfg.llenado = [...xy(), cfg.llenado[2]];
       break;
     case "bomba-z":
-      ponAltura(r2(clamp(b, 0.05, cfg.nivel - 0.10)));
+      ponAltura(r2(clamp(b, ALTURA_MIN, cfg.nivel - 0.10)));
       break;
     case "chorro-el": {
       const pc = vistas.corte.pc;
@@ -2075,39 +2237,39 @@ function aplicaArrastre(v, m, px, py) {
 }
 
 function enlazaVista(v) {
-  const cv = v.canvas;
+  const lienzo = v.canvas;
   let toque = null;
-  cv.addEventListener("touchstart", (e) => {
+  lienzo.addEventListener("touchstart", (e) => {
     const t = e.touches[0];
-    const r = cv.getBoundingClientRect();
+    const r = lienzo.getBoundingClientRect();
     if (manijaEn(v, t.clientX - r.left, t.clientY - r.top)) e.preventDefault();
   }, { passive: false });
-  cv.addEventListener("pointerdown", (e) => {
+  lienzo.addEventListener("pointerdown", (e) => {
     const [x, y] = local(v, e);
     const m = manijaEn(v, x, y);
     if (m) {
       arrastre = { v, m, id: e.pointerId };
-      cv.setPointerCapture(e.pointerId);
-      cv.style.cursor = "grabbing";
+      lienzo.setPointerCapture(e.pointerId);
+      lienzo.style.cursor = "grabbing";
       e.preventDefault();
     } else {
       toque = { x, y, id: e.pointerId };
     }
   });
-  cv.addEventListener("pointermove", (e) => {
+  lienzo.addEventListener("pointermove", (e) => {
     const [x, y] = local(v, e);
     if (arrastre && arrastre.v === v && arrastre.id === e.pointerId) {
       aplicaArrastre(v, arrastre.m, x, y);
       return;
     }
     if (e.pointerType === "mouse") {
-      cv.style.cursor = manijaEn(v, x, y) ? "grab" : v.tipo === "planta" && est.lugar === "clic" ? "crosshair" : "default";
+      lienzo.style.cursor = manijaEn(v, x, y) ? "grab" : v.tipo === "planta" && est.lugar === "clic" ? "crosshair" : "default";
     }
   });
   const suelta = (e) => {
     if (arrastre && arrastre.id === e.pointerId) {
       arrastre = null;
-      cv.style.cursor = "";
+      lienzo.style.cursor = "";
       cambioCfg();
       return;
     }
@@ -2115,16 +2277,16 @@ function enlazaVista(v) {
       const [x, y] = local(v, e);
       if (Math.hypot(x - toque.x, y - toque.y) < 8) {
         const [a, b] = v.inv(x, y);
-        if (a > 0.02 && a < cfg.largo - 0.02 && b > 0.02 && b < cfg.ancho - 0.02) {
-          cfg.lugar_dosis = [r2(a), r2(b), r2(cfg.nivel - 0.10)];
+        if (a > 0.02 && a < cfgV.largo - 0.02 && b > 0.02 && b < cfgV.ancho - 0.02) {
+          cfg.lugar_dosis = enSuperficie([r2(a), r2(b), 0], cfg.nivel);
           cambioCfg({ reinicia: false });
         }
       }
     }
     toque = null;
   };
-  cv.addEventListener("pointerup", suelta);
-  cv.addEventListener("pointercancel", suelta);
+  lienzo.addEventListener("pointerup", suelta);
+  lienzo.addEventListener("pointercancel", suelta);
 }
 
 // ---------- tamaños, tema y ciclo ----------
@@ -2246,7 +2408,7 @@ function choques() {
 window.visor = {
   get sim() { return sim; }, cfg, est, perf, choques,
   manijas: (nombre) => vistas[nombre].manijas.map(({ id, x, y }) => ({ id, x, y })),
-  get corridas() { return corridas.length; },
+  get corridas() { return corridas.length; }, get nSerie() { return serie ? serie.t.length : 0; },
   get vSim() { return perf.vSim; }, get costoPaso() { return perf.motorPasoMs; },
   aplica(cambios) {
     Object.assign(cfg, cambios);
