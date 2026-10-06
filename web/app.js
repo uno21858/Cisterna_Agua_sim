@@ -1,20 +1,9 @@
 // Visor en vivo de la cisterna: planta y corte a escala con el flujo de la bomba de mezcla.
-// El motor corre en el hilo principal con un presupuesto de tiempo por cuadro (SPEC.md, Visor).
+// El motor (solver.js) corre en worker.js y manda instantáneas; aquí solo se dibuja (SPEC.md, Visor).
 
-let mod;
-let motorReal = true;
-try {
-  mod = await import("./solver.js");
-  if (typeof mod.Cisterna !== "function") throw new Error("solver.js no exporta Cisterna");
-} catch (e) {
-  console.warn("Uso el motor de prueba:", e.message);
-  mod = await import("./stub_solver.js");
-  motorReal = false;
-}
-const { DEFAULTS, validar, geometria, puntoOperacion, tiempoMezclaS, Cisterna } = mod;
+import { DEFAULTS, validar, geometria, puntoOperacion, tiempoMezclaS } from "./solver.js";
 
 const RAD = Math.PI / 180;
-const PRESUPUESTO_MS = 8;
 const MURO = 0.15; // solo dibujo (supuesto)
 const LOSA = 0.10; // solo dibujo (supuesto)
 const BOCA = 0.60; // boca de la tapa de 60 x 60 cm, solo dibujo (supuesto)
@@ -24,9 +13,9 @@ const TUBO = 0.0267; // PVC 3/4, diámetro exterior
 const DIST_REJILLA = 0.5;
 const FRANJA = 0.25;
 const APAGA_S = 45 * 60;
-const CADA_S = 10;
 const ESTELA = 12;
 const DT_PART_MAX = 0.2;
+const JUNTOS_M = 0.12;
 
 const $ = (id) => document.getElementById(id);
 const copia = (o) => structuredClone(o);
@@ -51,14 +40,10 @@ const est = {
   lugar: "llenado",
 };
 
-let sim = null;
-let deuda = 0;
-let costoPaso = 4;
-let espera = 0;
-let vSim = 1;
+let sim = null; // última instantánea del motor: t, cFinal, malla y cloro
+let idSim = 0;
 let tDosis = 0;
 let apagaEn = APAGA_S;
-let proxMuestra = 0;
 let serie = null;
 let dosisT = [];
 let deteccion = { cov5: null, todo10: null };
@@ -66,8 +51,13 @@ let ultimo = { stats: null, sondas: null };
 let corridas = [];
 let corrida = null;
 let errorCfg = null;
+let errorMotor = null;
 let timerReinicio = 0;
 let arrastre = null;
+let nSnap = 0;
+
+const perf = { fps: 0, cuadroMs: 0, particulasMs: 0, fondoMs: 0, vistasMs: 0, motorPasoMs: 0, vSim: 0, motor: "" };
+const media = (k, x) => (perf[k] = perf[k] ? 0.9 * perf[k] + 0.1 * x : x);
 
 // ---------- tokens del tema ----------
 
@@ -90,6 +80,8 @@ function leeTokens() {
     s: [g("--s1"), g("--s2"), g("--s3")], peligro: g("--peligro"), aviso: g("--aviso"),
     ui: g("--f-ui"), num: g("--f-num"),
   };
+  T.tintaRgb = hexRgb(g("--particula"));
+  T.haloRgb = hexRgb(g("--particula-halo"));
   const paradas = ["--ramp-0", "--ramp-1", "--ramp-2", "--ramp-3"].map((n) => hexRgb(g(n)));
   for (let i = 0; i < 256; i++) {
     const f = (i / 255) * (paradas.length - 1);
@@ -100,190 +92,201 @@ function leeTokens() {
   patron = null;
   for (const v of Object.values(vistas)) v.sucio = true;
   fondoSucio = true;
+  graficaSucia = true;
 }
 
 const fuente = (tam, peso = 500, mono = false) => `${peso} ${tam}px ${mono ? T.num : T.ui}`;
 
-// ---------- simulación ----------
+// ---------- motor en el worker ----------
 
-function bombaEncendida() {
-  if (est.modo === "siempre") return true;
-  if (est.modo === "apagada") return false;
-  return sim.t < apagaEn - 1e-9;
+let motor = null;
+
+function transferibles(s) {
+  return s ? [s.c.buffer, s.uc.buffer, s.vc.buffer, s.wc.buffer, s.spd.buffer] : [];
 }
+
+function iniciaMotor() {
+  let w;
+  try {
+    w = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+  } catch (e) {
+    return motorDeRespaldo();
+  }
+  let vivo = false;
+  const plazo = setTimeout(() => {
+    if (!vivo) {
+      w.terminate();
+      motorDeRespaldo();
+    }
+  }, 10000);
+  w.onmessage = (e) => {
+    if (e.data.tipo === "listo") {
+      vivo = true;
+      clearTimeout(plazo);
+      return;
+    }
+    recibeMotor(e.data);
+  };
+  w.onerror = (e) => {
+    e.preventDefault();
+    if (vivo) {
+      errorMotor = e.message || "el motor se detuvo";
+      pintaAvisos();
+      return;
+    }
+    clearTimeout(plazo);
+    w.terminate();
+    motorDeRespaldo();
+  };
+  motor = { manda: (m, t) => w.postMessage(m, t || []) };
+  perf.motor = "worker";
+}
+
+// Sin Web Workers de módulo: el mismo motor corre aquí con un presupuesto chico por tarea.
+async function motorDeRespaldo() {
+  const { creaMotor } = await import("./worker.js");
+  const recibe = creaMotor((d) => recibeMotor(d), { presupuestoMs: 6, enHiloPrincipal: true });
+  motor = { manda: (m) => recibe(m) };
+  perf.motor = "hilo principal";
+  pintaMotor();
+  arranca();
+}
+
+function recibeMotor(m) {
+  if (m.tipo === "error") {
+    if (m.id === idSim) {
+      errorCfg = m.mensaje;
+      pintaAvisos();
+    }
+    return;
+  }
+  if (m.tipo !== "snap") return;
+  if (m.id !== idSim) {
+    motor.manda({ tipo: "devuelve", set: m.set }, transferibles(m.set));
+    return;
+  }
+  const otraMalla = !sim || sim.id !== m.id || sim.nx !== m.nx || sim.ny !== m.ny || sim.nz !== m.nz;
+  const viejo = snap.set;
+  sim = {
+    id: m.id, t: m.t, cFinal: m.cFinal, encendida: m.encendida, nx: m.nx, ny: m.ny, nz: m.nz,
+    dx: m.dx, dy: m.dy, dz: m.dz, volCelda: m.volCelda, L: m.L, W: m.W, H: m.H, c: m.set.c,
+  };
+  Object.assign(snap, {
+    set: m.set, uc: m.set.uc, vc: m.set.vc, wc: m.set.wc, spd: m.set.spd, vmax: m.vmax, vEsc: m.vEsc,
+    nx: m.nx, ny: m.ny, nz: m.nz, dx: m.dx, dy: m.dy, dz: m.dz, L: m.L, W: m.W, H: m.H,
+  });
+  perf.vSim = m.vSim;
+  perf.motorPasoMs = m.costoPaso;
+  for (const ev of m.eventos) {
+    if (ev.tipo === "dosis") alDosificar(ev.t);
+    else registra(ev);
+  }
+  if (viejo) motor.manda({ tipo: "devuelve", set: viejo }, transferibles(viejo));
+  if (otraMalla) {
+    for (const v of Object.values(vistas)) v.P = null;
+    fondoSucio = true;
+    $("cargando").hidden = true;
+  }
+  nSnap++;
+}
+
+function mandaControl() {
+  motor?.manda({ tipo: "control", corriendo: est.corriendo && !document.hidden, velocidad: est.velocidad, modo: est.modo });
+}
+
+// ---------- corrida ----------
 
 function volumen(c = cfg) {
   return c.largo * c.ancho * c.nivel;
 }
 
+function dosisActual() {
+  const g = geometria(copia(cfg));
+  return { masa: cfg.dosis_ml * cfg.cloralex_mg_ml, punto: g.punto_dosis };
+}
+
 function arranca() {
-  let nueva;
-  try {
-    nueva = new Cisterna(copia(cfg));
-  } catch (e) {
-    errorCfg = e.message;
+  const e = valida();
+  if (e) {
+    errorCfg = e;
     pintaAvisos();
     return false;
   }
-  if (corrida && sim) corrida.activa = false;
-  sim = nueva;
   errorCfg = null;
-  deuda = 0;
-  espera = 0;
+  if (!motor) return false;
+  idSim++;
+  if (corrida) corrida.activa = false;
   dosisT = [];
+  deteccion = { cov5: null, todo10: null };
+  ultimo = { stats: null, sondas: null };
   serie = { t: [], s: [[], [], []], lo: [], hi: [], meta: [], nombres: [] };
   corrida = { n: (corridas[0]?.n ?? 0) + 1, ...resumenCfg(), cov5: null, todo10: null, tMax: 0, activa: true };
   corridas.unshift(corrida);
   if (corridas.length > 12) corridas.pop();
-  echaCloro();
-  tomaSnapshot();
-  for (const v of Object.values(vistas)) {
-    v.sucio = true;
-    v.P = null;
-  }
-  fondoSucio = true;
-  $("cargando").hidden = true;
+  mandaControl();
+  motor.manda({ tipo: "arranca", id: idSim, cfg: copia(cfg), dosis: dosisActual() });
+  for (const v of Object.values(vistas)) v.sucio = true;
   pintaAvisos();
   pintaCorridas();
+  graficaSucia = true;
   return true;
 }
 
 function echaCloro() {
-  if (!sim) return;
-  const g = geometria(copia(cfg));
-  sim.dosifica(cfg.dosis_ml * cfg.cloralex_mg_ml, g.punto_dosis);
-  tDosis = sim.t;
-  dosisT.push(sim.t);
-  apagaEn = sim.t + APAGA_S;
-  deteccion = { cov5: null, todo10: null };
-  registra();
+  if (!sim || !motor) return;
+  motor.manda({ tipo: "dosis", ...dosisActual() });
 }
 
-function registra() {
-  const st = sim.stats();
-  const so = sim.valoresSondas();
+function alDosificar(t) {
+  tDosis = t;
+  dosisT.push(t);
+  apagaEn = t + APAGA_S;
+  deteccion = { cov5: null, todo10: null };
+}
+
+function registra(m) {
+  const st = m.stats, so = m.sondas, cf = m.cFinal;
   ultimo = { stats: st, sondas: so };
-  const cf = sim.cFinal;
   const nombres = Object.keys(so);
   serie.nombres = nombres;
-  serie.t.push(sim.t / 60);
+  serie.t.push(m.t / 60);
   nombres.slice(0, 3).forEach((n, k) => serie.s[k].push(so[n]));
   serie.lo.push(st.cmin * cf);
   serie.hi.push(st.cmax * cf);
   serie.meta.push(cf);
-  const tm = (sim.t - tDosis) / 60;
-  const vol = sim.nx * sim.ny * sim.nz * sim.volCelda;
-  const media = cf > 0 ? st.masa_mg / (vol * 1000) / cf : 1;
+  const tm = (m.t - tDosis) / 60;
+  const vol = sim ? sim.L * sim.W * sim.H : volumen();
+  const relMedia = cf > 0 ? st.masa_mg / (vol * 1000) / cf : 1;
   if (tm > 0 && deteccion.cov5 == null && st.cov < 0.05) deteccion.cov5 = tm;
-  if (tm > 0 && deteccion.todo10 == null && st.cmin >= 0.9 * media && st.cmax <= 1.1 * media) deteccion.todo10 = tm;
+  if (tm > 0 && deteccion.todo10 == null && st.cmin >= 0.9 * relMedia && st.cmax <= 1.1 * relMedia) deteccion.todo10 = tm;
   if (dosisT.length === 1 && corrida) {
     corrida.tMax = tm;
     if (corrida.cov5 == null && deteccion.cov5 != null) corrida.cov5 = deteccion.cov5;
     if (corrida.todo10 == null && deteccion.todo10 != null) corrida.todo10 = deteccion.todo10;
   }
-  proxMuestra = sim.t + CADA_S;
   graficaSucia = true;
 }
 
-function avanzaSim(dtReal) {
-  if (!sim) return 0;
-  deuda = Math.min(deuda + dtReal * est.velocidad, Math.max(0.5, est.velocidad * 0.25));
-  if (espera > 0) {
-    espera--;
-    return 0;
-  }
-  const t0 = performance.now();
-  const tIni = sim.t;
-  let pasos = 0;
-  while (deuda > 1e-4) {
-    let dt = Math.min(sim.dtFlujo(), deuda);
-    if (est.modo === "firmware" && sim.t < apagaEn - 1e-9) dt = Math.min(dt, apagaEn - sim.t);
-    dt = Math.max(dt, 1e-4);
-    sim.avanza(dt, { cloro: sim.cFinal > 0, bomba: bombaEncendida() });
-    deuda -= dt;
-    pasos++;
-    if (sim.t >= proxMuestra - 1e-9) registra();
-    if (performance.now() - t0 > PRESUPUESTO_MS) break;
-  }
-  if (pasos) {
-    costoPaso = 0.8 * costoPaso + 0.2 * ((performance.now() - t0) / pasos);
-    espera = costoPaso > PRESUPUESTO_MS * 1.5 ? Math.min(4, Math.floor(costoPaso / PRESUPUESTO_MS) - 1) : 0;
-  }
-  return sim.t - tIni;
+function bombaEncendida() {
+  if (est.modo === "siempre") return true;
+  if (est.modo === "apagada") return false;
+  return sim ? sim.encendida : true;
 }
 
-function cambiaConsumo() {
-  // El consumo no cambia la malla: paso el estado a un motor nuevo en vez de reiniciar.
-  if (!sim) return;
-  let nueva;
-  try {
-    nueva = new Cisterna({ ...copia(sim.cfg), consumo_lpm: cfg.consumo_lpm });
-  } catch (e) {
-    errorCfg = e.message;
-    pintaAvisos();
-    return;
-  }
-  if (nueva.u.length !== sim.u.length || nueva.c.length !== sim.c.length) return arranca();
-  nueva.u.set(sim.u);
-  nueva.v.set(sim.v);
-  nueva.w.set(sim.w);
-  nueva.c.set(sim.c);
-  nueva.t = sim.t;
-  nueva.cFinal = sim.cFinal;
-  sim = nueva;
-}
+// ---------- velocidad interpolada en la instantánea ----------
 
-// ---------- velocidades en los centros (para partículas y flechas) ----------
+const snap = { set: null, uc: null, vc: null, wc: null, spd: null, vmax: 0, vEsc: 0.05 };
 
-const snap = { uc: null, vc: null, wc: null, spd: null, vmax: 0, vEsc: 0.05, tEsc: 0 };
-
-function tomaSnapshot() {
-  const { nx, ny, nz } = sim;
-  const n = nx * ny * nz;
-  if (!snap.uc || snap.uc.length !== n) {
-    snap.uc = new Float32Array(n);
-    snap.vc = new Float32Array(n);
-    snap.wc = new Float32Array(n);
-    snap.spd = new Float32Array(n);
-  }
-  Object.assign(snap, { nx, ny, nz, dx: sim.dx, dy: sim.dy, dz: sim.dz, L: sim.cfg.largo, W: sim.cfg.ancho, H: sim.cfg.nivel });
-  const { u, v, w } = sim;
-  let vmax = 0;
-  for (let i = 0; i < nx; i++) {
-    for (let j = 0; j < ny; j++) {
-      for (let k = 0; k < nz; k++) {
-        const m = (i * ny + j) * nz + k;
-        const mv = (i * (ny + 1) + j) * nz + k;
-        const mw = (i * ny + j) * (nz + 1) + k;
-        const a = 0.5 * (u[m] + u[m + ny * nz]);
-        const b = 0.5 * (v[mv] + v[mv + nz]);
-        const c = 0.5 * (w[mw] + w[mw + 1]);
-        snap.uc[m] = a;
-        snap.vc[m] = b;
-        snap.wc[m] = c;
-        const s = Math.sqrt(a * a + b * b + c * c);
-        snap.spd[m] = s;
-        if (s > vmax) vmax = s;
-      }
-    }
-  }
-  snap.vmax = vmax;
-  const ahora = performance.now();
-  if (ahora - snap.tEsc > 500) {
-    snap.tEsc = ahora;
-    const orden = Float32Array.from(snap.spd).sort();
-    const p98 = orden[Math.floor(0.98 * (orden.length - 1))];
-    snap.vEsc = Math.max(0.005, p98);
-  }
-}
-
-const velTmp = [0, 0, 0];
-function velEn(x, y, z, out = velTmp) {
+function velEn(x, y, z, out) {
   const { nx, ny, nz } = snap;
-  const fi = clamp(x / snap.dx - 0.5, 0, nx - 1);
-  const fj = clamp(y / snap.dy - 0.5, 0, ny - 1);
-  const fk = clamp(z / snap.dz - 0.5, 0, nz - 1);
-  const i0 = Math.min(fi | 0, nx - 2), j0 = Math.min(fj | 0, ny - 2), k0 = Math.min(fk | 0, nz - 2);
+  let fi = x / snap.dx - 0.5, fj = y / snap.dy - 0.5, fk = z / snap.dz - 0.5;
+  fi = fi < 0 ? 0 : fi > nx - 1 ? nx - 1 : fi;
+  fj = fj < 0 ? 0 : fj > ny - 1 ? ny - 1 : fj;
+  fk = fk < 0 ? 0 : fk > nz - 1 ? nz - 1 : fk;
+  let i0 = fi | 0, j0 = fj | 0, k0 = fk | 0;
+  if (i0 > nx - 2) i0 = nx - 2;
+  if (j0 > ny - 2) j0 = ny - 2;
+  if (k0 > nz - 2) k0 = nz - 2;
   const ti = fi - i0, tj = fj - j0, tk = fk - k0;
   const sx = ny * nz, sy = nz;
   const b = (i0 * ny + j0) * nz + k0;
@@ -291,10 +294,13 @@ function velEn(x, y, z, out = velTmp) {
   const w010 = (1 - ti) * tj * (1 - tk), w011 = (1 - ti) * tj * tk;
   const w100 = ti * (1 - tj) * (1 - tk), w101 = ti * (1 - tj) * tk;
   const w110 = ti * tj * (1 - tk), w111 = ti * tj * tk;
-  for (const [c, a] of [[0, snap.uc], [1, snap.vc], [2, snap.wc]]) {
-    out[c] = a[b] * w000 + a[b + 1] * w001 + a[b + sy] * w010 + a[b + sy + 1] * w011
-      + a[b + sx] * w100 + a[b + sx + 1] * w101 + a[b + sx + sy] * w110 + a[b + sx + sy + 1] * w111;
-  }
+  const b1 = b + sy, b2 = b + sx, b3 = b + sx + sy;
+  let a = snap.uc;
+  out[0] = a[b] * w000 + a[b + 1] * w001 + a[b1] * w010 + a[b1 + 1] * w011 + a[b2] * w100 + a[b2 + 1] * w101 + a[b3] * w110 + a[b3 + 1] * w111;
+  a = snap.vc;
+  out[1] = a[b] * w000 + a[b + 1] * w001 + a[b1] * w010 + a[b1 + 1] * w011 + a[b2] * w100 + a[b2 + 1] * w101 + a[b3] * w110 + a[b3 + 1] * w111;
+  a = snap.wc;
+  out[2] = a[b] * w000 + a[b + 1] * w001 + a[b1] * w010 + a[b1 + 1] * w011 + a[b2] * w100 + a[b2 + 1] * w101 + a[b3] * w110 + a[b3 + 1] * w111;
   return out;
 }
 
@@ -320,6 +326,14 @@ function proy(pc, x, y) {
   return [dx * pc.h[0] + dy * pc.h[1], dx * pc.n[0] + dy * pc.n[1]];
 }
 
+function operacion() {
+  try {
+    return puntoOperacion(cfg.q_max_lh, cfg.h_max_m, cfg.boquilla_mm, cfg.salida_mm, cfg.k_salida);
+  } catch {
+    return null;
+  }
+}
+
 function rayoChorro(g = geo) {
   const p = g.pos_bomba, d = g.dir_chorro;
   let t = Infinity, donde = "pared";
@@ -337,10 +351,7 @@ function rayoChorro(g = geo) {
   const r = [cfg.pozo[0] - p[0], cfg.pozo[1] - p[1], cfg.pozo[2] - p[2]];
   const tc = clamp(r[0] * d[0] + r[1] * d[1] + r[2] * d[2], 0, t);
   const dist = Math.hypot(r[0] - d[0] * tc, r[1] - d[1] * tc, r[2] - d[2] * tc);
-  let op = null;
-  try {
-    op = puntoOperacion(cfg.q_max_lh, cfg.h_max_m, cfg.boquilla_mm, cfg.salida_mm, cfg.k_salida);
-  } catch {}
+  const op = operacion();
   // Chorro redondo libre: u_eje = 6.2 u0 d / x (estimación, vale lejos de la boquilla).
   const uFin = op ? Math.min(op.u_ms, 6.2 * op.u_ms * (cfg.boquilla_mm / 1000) / t) : 0;
   return { t, fin, donde, dist, tc, uFin };
@@ -348,10 +359,7 @@ function rayoChorro(g = geo) {
 
 function resumenCfg() {
   const p = geo.pos_bomba, d = geo.dir_chorro;
-  let op = null;
-  try {
-    op = puntoOperacion(cfg.q_max_lh, cfg.h_max_m, cfg.boquilla_mm, cfg.salida_mm, cfg.k_salida);
-  } catch {}
+  const op = operacion();
   const az = Math.round(Math.atan2(d[1], d[0]) / RAD);
   const el = Math.round(Math.asin(clamp(d[2], -1, 1)) / RAD);
   const bomba = cfg.pos_bomba
@@ -363,6 +371,11 @@ function resumenCfg() {
     : cfg.lugar_dosis === "mastil" ? "boca" : "flotador";
   const formula = op ? tiempoMezclaS(volumen(), op.m_m4s2) / 60 : null;
   return { bomba, chorro, dosis: `${cfg.dosis_ml} mL, ${lugar}`, formula };
+}
+
+function dosisJuntoAlFlotador() {
+  const pd = geo.punto_dosis, ll = cfg.llenado;
+  return Math.hypot(pd[0] - ll[0], pd[1] - ll[1]) < JUNTOS_M;
 }
 
 // ---------- vistas ----------
@@ -379,9 +392,11 @@ function creaVista(id, tipo) {
   const canvas = $(id);
   const over = document.createElement("canvas");
   const img = document.createElement("canvas");
+  const capa = document.createElement("canvas");
   return {
     tipo, canvas, ctx: canvas.getContext("2d"), over, octx: over.getContext("2d"), img, ictx: img.getContext("2d"),
-    w: 0, h: 0, dpr: 1, esc: 100, sucio: true, visible: true, manijas: [], P: null, ext: null,
+    capa, cctx: capa.getContext("2d"), cimg: null, c32: null,
+    w: 0, h: 0, dpr: 1, esc: 100, sucio: true, visible: true, manijas: [], P: null, ext: null, flechas: null,
   };
 }
 
@@ -406,8 +421,11 @@ function dimensiona(v) {
     v.inv = (px, py) => [(px - ox) / esc, W + MURO - (py - m.t) / esc];
   } else {
     const pc = planoCorte();
+    const clave = [pc.o, pc.h, pc.h0, pc.h1].flat().map((q) => q.toFixed(3)).join();
+    if (clave !== v.clavePlano) v.P = null;
+    v.clavePlano = clave;
     v.pc = pc;
-    const m = { l: 44, r: 52, t: 8, b: 50 };
+    const m = { l: 30, r: 52, t: 8, b: 50 };
     const zTop = cfg.z_tapa + LOSA + 0.30, zBot = -MURO;
     const ew = pc.h1 - pc.h0 + 2 * MURO, eh = zTop - zBot;
     esc = (w - m.l - m.r) / ew;
@@ -432,10 +450,16 @@ function dimensiona(v) {
       c.width = Math.round(w * dpr);
       c.height = Math.round(h * dpr);
     }
+    v.capa.width = w;
+    v.capa.height = h;
+    v.cimg = v.cctx.createImageData(w, h);
+    v.c32 = new Uint32Array(v.cimg.data.buffer);
     patron = null;
   }
+  if (v.esc !== esc) v.P = null;
   v.esc = esc;
   v.sucio = true;
+  v.flechas = null;
 }
 
 function hazPatron(ctx, dpr) {
@@ -529,28 +553,39 @@ function tache(c, x, y, color) {
   trazo(c, [[x - 5, y + 5], [x + 5, y - 5]], color, 2);
 }
 
+function anchoTexto(c, s, tam, peso = 500, mono = false) {
+  c.font = fuente(tam, peso, mono);
+  return c.measureText(s).width;
+}
+
 // Cota al estilo de plano: línea fina, diagonales en los extremos y el número en cm.
-function cotaH(c, x1, x2, y, txt, color = T.tinta2, yRef = null) {
+function cotaH(c, R, x1, x2, y, txt, color = T.tinta2, yRef = null) {
   if (yRef != null) {
     trazo(c, [[x1, yRef], [x1, y + 4]], color, 0.8);
     trazo(c, [[x2, yRef], [x2, y + 4]], color, 0.8);
   }
   trazo(c, [[x1 - 4, y], [x2 + 4, y]], color, 1);
   for (const x of [x1, x2]) trazo(c, [[x - 4, y + 4], [x + 4, y - 4]], color, 1.2);
-  texto(c, txt, (x1 + x2) / 2, y - 7, { color, tam: 11, mono: true, alinea: "center" });
+  const xm = (x1 + x2) / 2, tw = anchoTexto(c, txt, 11, 500, true);
+  texto(c, txt, xm, y - 7, { color, tam: 11, mono: true, alinea: "center" });
+  R.tapa(xm - tw / 2 - 2, y - 14, xm + tw / 2 + 2, y, 4);
+  R.linea(x1, y, x2, y, 2, 0.4);
 }
 
-function cotaV(c, x, y1, y2, txt, color = T.tinta2, xRef = null, lado = 1) {
+function cotaV(c, R, x, y1, y2, txt, color = T.tinta2, xRef = null, lado = 1) {
   if (xRef != null) {
     trazo(c, [[xRef, y1], [x + 4 * lado, y1]], color, 0.8);
     trazo(c, [[xRef, y2], [x + 4 * lado, y2]], color, 0.8);
   }
   trazo(c, [[x, y1 + 4], [x, y2 - 4]], color, 1);
   for (const y of [y1, y2]) trazo(c, [[x - 4, y + 4], [x + 4, y - 4]], color, 1.2);
-  texto(c, txt, x + 8 * lado, (y1 + y2) / 2, { color, tam: 11, mono: true, alinea: "center", rot: -Math.PI / 2 });
+  const ym = (y1 + y2) / 2, tw = anchoTexto(c, txt, 11, 500, true);
+  texto(c, txt, x + 8 * lado, ym, { color, tam: 11, mono: true, alinea: "center", rot: -Math.PI / 2 });
+  R.tapa(x + 8 * lado - 7, ym - tw / 2 - 2, x + 8 * lado + 7, ym + tw / 2 + 2, 4);
+  R.linea(x, y1, x, y2, 2, 0.4);
 }
 
-function barraEscala(c, x, y, esc) {
+function barraEscala(c, R, x, y, esc) {
   const paso = esc > 140 ? 0.25 : 0.5;
   const n = 2;
   for (let i = 0; i < n; i++) {
@@ -564,6 +599,7 @@ function barraEscala(c, x, y, esc) {
     texto(c, String(Math.round(i * paso * 100)) + (i === n ? " cm" : ""), x + i * paso * esc, y + 14,
       { tam: 10, mono: true, alinea: i === n ? "left" : "center", color: T.tinta2, halo: false });
   }
+  R.tapa(x - 6, y - 2, x + n * paso * esc + 40, y + 20, 4);
 }
 
 function cuerpoMibee(c, x, y, ang, esc) {
@@ -605,11 +641,103 @@ function limpiaOverlay(v) {
   return c;
 }
 
+// ---------- rótulos sin choques ----------
+// Cada nombre prueba lugares alrededor de su pieza, en anillos cada vez más lejanos, y se queda
+// con el que menos tapa a otros rótulos, a las piezas dibujadas y a las cotas. Desde el segundo
+// anillo lleva línea guía.
+
+const RUMBOS = { e: [1, 0], o: [-1, 0], n: [0, -1], s: [0, 1], ne: [1, -1], no: [-1, -1], se: [1, 1], so: [-1, 1] };
+const ORDEN_RUMBOS = ["e", "o", "ne", "no", "se", "so", "n", "s"];
+
+function creaRotulos(c, w, h, tam) {
+  const obst = [];
+  const pedidos = [];
+  const inter = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+  const R = {
+    tapa(x0, y0, x1, y1, peso = 3) {
+      obst.push([Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), peso]);
+    },
+    punto(x, y, r, peso = 3) {
+      obst.push([x - r, y - r, x + r, y + r, peso]);
+    },
+    linea(xa, ya, xb, yb, g = 3, peso = 1) {
+      const n = Math.max(1, Math.ceil(Math.hypot(xb - xa, yb - ya) / (1.6 * g)));
+      for (let i = 0; i <= n; i++) {
+        const x = xa + ((xb - xa) * i) / n, y = ya + ((yb - ya) * i) / n;
+        obst.push([x - g, y - g, x + g, y + g, peso]);
+      }
+    },
+    pide(txt, x, y, o = {}) {
+      pedidos.push({ txt, x, y, r: o.r ?? 6, color: o.color ?? T.tinta2, peso: o.peso ?? 500, prio: o.prio ?? 0, pref: o.pref ?? ORDEN_RUMBOS });
+    },
+    resuelve() {
+      const puestos = [];
+      pedidos.sort((a, b) => b.prio - a.prio);
+      // Las piezas de cada rótulo estorban a los demás.
+      for (const p of pedidos) obst.push([p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r, 3, p]);
+      const padX = 3, th = tam + 5;
+      for (const p of pedidos) {
+        const tw = anchoTexto(c, p.txt, tam, p.peso) + 2 * padX;
+        let mejor = null;
+        const anillos = [p.r + 3, p.r + 15, p.r + 30, p.r + 48];
+        anillos.forEach((d, ia) => {
+          const rumbos = [...p.pref, ...ORDEN_RUMBOS.filter((q) => !p.pref.includes(q))];
+          rumbos.forEach((nombre, ir) => {
+            const [dx, dy] = RUMBOS[nombre];
+            const k = dx && dy ? 0.72 : 1;
+            const ax = p.x + dx * d * k, ay = p.y + dy * d * k;
+            const x0 = dx > 0 ? ax : dx < 0 ? ax - tw : ax - tw / 2;
+            const y0 = dy > 0 ? ay : dy < 0 ? ay - th : ay - th / 2;
+            const r = [x0, y0, x0 + tw, y0 + th];
+            let costo = ia * 140 + ir * 6;
+            if (x0 < 1 || y0 < 1 || r[2] > w - 1 || r[3] > h - 1) costo += 1e6;
+            for (const q of puestos) costo += 40 * inter(r, q);
+            for (const o of obst) if (o[5] !== p) costo += o[4] * inter(r, o);
+            if (!mejor || costo < mejor.costo) mejor = { costo, r, ia, dx, dy };
+          });
+        });
+        const { r, ia } = mejor;
+        puestos.push(r);
+        let guia = null;
+        if (ia >= 1) {
+          const gx = clamp(p.x, r[0], r[2]), gy = clamp(p.y, r[1], r[3]);
+          const dd = Math.hypot(gx - p.x, gy - p.y) || 1;
+          guia = [p.x + ((gx - p.x) / dd) * p.r, p.y + ((gy - p.y) / dd) * p.r, gx, gy];
+          R.linea(...guia, 1.5, 1);
+        }
+        p.lugar = { r, guia };
+      }
+      c.save();
+      c.textBaseline = "middle";
+      for (const p of pedidos) {
+        const { r, guia } = p.lugar;
+        if (guia) trazo(c, [[guia[0], guia[1]], [guia[2], guia[3]]], p.color, 1);
+        c.globalAlpha = 0.88;
+        c.fillStyle = T.papel;
+        c.beginPath();
+        c.roundRect(r[0], r[1], r[2] - r[0], r[3] - r[1], 2);
+        c.fill();
+        c.globalAlpha = 1;
+        c.font = fuente(tam, p.peso);
+        c.fillStyle = p.color;
+        c.textAlign = "left";
+        c.fillText(p.txt, r[0] + padX, (r[1] + r[3]) / 2 + 0.5);
+      }
+      c.restore();
+      return pedidos;
+    },
+  };
+  return R;
+}
+
+const tamRotulo = (v) => (v.w < 520 ? 11 : 12);
+
 // ---------- planta ----------
 
 function overlayPlanta(v) {
   const c = limpiaOverlay(v);
   const { X, Y, esc } = v;
+  const R = creaRotulos(c, v.w, v.h, tamRotulo(v));
   const L = cfg.largo, W = cfg.ancho;
   const ray = rayoChorro();
   const avisoRejilla = ray.dist < DIST_REJILLA;
@@ -631,8 +759,9 @@ function overlayPlanta(v) {
   const a1 = [pc.o[0] + pc.h[0] * pc.h1, pc.o[1] + pc.h[1] * pc.h1];
   trazo(c, [[X(a0[0]), Y(a0[1])], [X(a1[0]), Y(a1[1])]], T.tinta3, 1, [10, 3, 2, 3]);
   for (const [p, sgn] of [[a0, -1], [a1, 1]]) {
-    const px = X(p[0] + pc.h[0] * sgn * 0.06), py = Y(p[1] + pc.h[1] * sgn * 0.06);
+    const px = X(p[0] + pc.h[0] * sgn * 0.075), py = Y(p[1] + pc.h[1] * sgn * 0.075);
     texto(c, "A", px, py, { tam: 11, peso: 700, alinea: "center", color: T.tinta2 });
+    R.punto(px, py, 7, 4);
   }
 
   // Boca de la tapa (arriba del plano de corte: línea oculta) y travesaño
@@ -640,10 +769,12 @@ function overlayPlanta(v) {
   trazo(c, [[X(bx - BOCA / 2), Y(by - BOCA / 2)], [X(bx + BOCA / 2), Y(by - BOCA / 2)], [X(bx + BOCA / 2), Y(by + BOCA / 2)],
     [X(bx - BOCA / 2), Y(by + BOCA / 2)], [X(bx - BOCA / 2), Y(by - BOCA / 2)]], T.tinta2, 1, [6, 4]);
   const [rx, ry] = geo.rumbo;
-  trazo(c, [[X(bx + ry * BOCA / 2), Y(by - rx * BOCA / 2)], [X(bx - ry * BOCA / 2), Y(by + rx * BOCA / 2)]], T.tinta2, 3);
+  const trav = [X(bx + ry * BOCA / 2), Y(by - rx * BOCA / 2), X(bx - ry * BOCA / 2), Y(by + rx * BOCA / 2)];
+  trazo(c, [[trav[0], trav[1]], [trav[2], trav[3]]], T.tinta2, 3);
+  R.linea(...trav, 3, 1);
 
   // Zona a evitar alrededor de la rejilla
-  const [px, py, pz] = cfg.pozo;
+  const [px, py] = cfg.pozo;
   c.beginPath();
   c.arc(X(px), Y(py), DIST_REJILLA * esc, 0, Math.PI * 2);
   c.strokeStyle = avisoRejilla ? T.peligro : T.tinta3;
@@ -658,8 +789,10 @@ function overlayPlanta(v) {
   const kp = dists.indexOf(Math.min(...dists));
   const ent = kp === 0 ? [lx, -MURO] : kp === 1 ? [lx, W + MURO] : kp === 2 ? [-MURO, ly] : [L + MURO, ly];
   trazo(c, [[X(ent[0]), Y(ent[1])], [X(lx), Y(ly)]], T.tinta2, Math.max(2, 0.021 * esc));
+  R.linea(X(ent[0]), Y(ent[1]), X(lx), Y(ly), 2, 1);
+  const rFlot = Math.max(5, 0.06 * esc);
   c.beginPath();
-  c.arc(X(lx), Y(ly), Math.max(5, 0.06 * esc), 0, Math.PI * 2);
+  c.arc(X(lx), Y(ly), rFlot, 0, Math.PI * 2);
   c.fillStyle = T.papel;
   c.fill();
   c.strokeStyle = T.tinta;
@@ -667,41 +800,51 @@ function overlayPlanta(v) {
   c.stroke();
 
   // Bomba de pozo con la sonda de la llave en su rejilla
+  const rPozo = Math.max(5, (POZO_DIAM / 2) * esc);
   c.beginPath();
-  c.arc(X(px), Y(py), Math.max(5, (POZO_DIAM / 2) * esc), 0, Math.PI * 2);
+  c.arc(X(px), Y(py), rPozo, 0, Math.PI * 2);
   c.fillStyle = T.tinta2;
   c.fill();
   c.strokeStyle = T.tinta;
   c.lineWidth = 1;
   c.stroke();
   c.beginPath();
-  c.arc(X(px), Y(py), Math.max(5, (POZO_DIAM / 2) * esc) + 3, 0, Math.PI * 2);
+  c.arc(X(px), Y(py), rPozo + 3, 0, Math.PI * 2);
   c.strokeStyle = T.s[1];
   c.lineWidth = 2.5;
   c.stroke();
 
   // Mástil y sonda ORP
-  const tope = [bx, by];
   const punta = geo.punto_tubo(cfg.z_orp);
-  trazo(c, [[X(tope[0]), Y(tope[1])], [X(punta[0]), Y(punta[1])]], T.tinta2, Math.max(2.5, TUBO * esc));
+  trazo(c, [[X(bx), Y(by)], [X(punta[0]), Y(punta[1])]], T.tinta2, Math.max(2.5, TUBO * esc));
+  R.linea(X(bx), Y(by), X(punta[0]), Y(punta[1]), 3, 1.5);
   marcaSonda(c, X(punta[0]), Y(punta[1]), T.s[2]);
   marcaSonda(c, X(bx), Y(by), T.s[0]);
+  R.punto(X(bx), Y(by), 6, 3);
 
   // Dosis
   const pd = geo.punto_dosis;
-  marcaDosis(c, X(pd[0]), Y(pd[1]) - 2);
+  const juntos = dosisJuntoAlFlotador();
+  const dosisXY = juntos ? [X(lx) + rFlot + 4, Y(ly) - rFlot - 2] : [X(pd[0]), Y(pd[1]) - 2];
+  marcaDosis(c, dosisXY[0], dosisXY[1]);
+  R.punto(dosisXY[0], dosisXY[1] - 2, 7, 3);
 
   // Bomba de mezcla, chorro y amarre libre
   const pb = geo.pos_bomba, d = geo.dir_chorro;
-  if (cfg.pos_bomba) trazo(c, [[X(bx), Y(by)], [X(pb[0]), Y(pb[1])]], T.acento, 1.2, [5, 4]);
+  if (cfg.pos_bomba) {
+    trazo(c, [[X(bx), Y(by)], [X(pb[0]), Y(pb[1])]], T.acento, 1.2, [5, 4]);
+    R.linea(X(bx), Y(by), X(pb[0]), Y(pb[1]), 2, 0.5);
+  }
   const colorRayo = avisoRejilla || ray.donde === "fondo" ? T.peligro : T.acento;
   trazo(c, [[X(pb[0]), Y(pb[1])], [X(ray.fin[0]), Y(ray.fin[1])]], colorRayo, 1.2, [2, 4]);
+  R.linea(X(pb[0]), Y(pb[1]), X(ray.fin[0]), Y(ray.fin[1]), 2, 0.3);
   tache(c, X(ray.fin[0]), Y(ray.fin[1]), colorRayo);
   const nh = Math.hypot(d[0], d[1]);
   const az = Math.atan2(d[1], d[0]);
   const lf = Math.max(0.5 * nh, 0.24);
   const tip = [pb[0] + Math.cos(az) * lf, pb[1] + Math.sin(az) * lf];
   flecha(c, X(pb[0]), Y(pb[1]), X(tip[0]), Y(tip[1]), T.acento, 2.5, 10);
+  R.linea(X(pb[0]), Y(pb[1]), X(tip[0]), Y(tip[1]), 4, 2);
   cuerpoMibee(c, X(pb[0]), Y(pb[1]), -az, esc);
   manija(v, "bomba", X(pb[0]), Y(pb[1]), 15);
   c.beginPath();
@@ -711,6 +854,7 @@ function overlayPlanta(v) {
   c.strokeStyle = T.acento;
   c.lineWidth = 2;
   c.stroke();
+  R.punto(X(tip[0]), Y(tip[1]), 9, 3);
   v.manijas.push({ id: "chorro", x: X(tip[0]), y: Y(tip[1]), r: 20 });
 
   if (est.editar) {
@@ -719,36 +863,40 @@ function overlayPlanta(v) {
     manija(v, "llenado", X(lx), Y(ly), 12, true, "cuadro");
   }
 
-  if (est.capas.nombres) {
-    const n = (s, x, y, o) => texto(c, s, x, y, { tam: 12, color: T.tinta2, ...o });
-    n("boca", X(bx - BOCA / 2) + 3, Y(by + BOCA / 2) - 8);
-    n("bomba de pozo", X(px), Y(py) + 18, { alinea: "center" });
-    n("flotador", X(lx), Y(ly) + (ly > W / 2 ? 18 : -18), { alinea: "center" });
-    n("sonda ORP", X(punta[0]) + 10, Y(punta[1]) + 12);
-    n(`mástil ${cfg.angulo_tubo}°`, X((bx + punta[0]) / 2) + 8, Y((by + punta[1]) / 2) - 8);
-    const sx = Math.cos(az) >= 0 ? -1 : 1;
-    n("bomba de mezcla", X(pb[0]) + sx * 18, Y(pb[1]) - 16, { alinea: sx < 0 ? "right" : "left", color: T.acento, peso: 600 });
-    n("dosis", X(pd[0]) + 9, Y(pd[1]) - 4);
-    const etq = ray.donde === "fondo" ? "pega en el fondo" : ray.donde === "superficie" ? "sale arriba" : "pega en la pared";
-    n(etq, X(ray.fin[0]) + 8, Y(ray.fin[1]) + 12, { color: colorRayo, tam: 11 });
-  }
-
   if (est.capas.cotas) {
-    cotaH(c, X(0), X(L), Y(-MURO) + 18, String(cm(L)), T.tinta2, Y(-MURO) + 2);
-    cotaV(c, X(L + MURO) + 18, Y(W), Y(0), String(cm(W)), T.tinta2, X(L + MURO) + 2);
+    cotaH(c, R, X(0), X(L), Y(-MURO) + 18, String(cm(L)), T.tinta2, Y(-MURO) + 2);
+    cotaV(c, R, X(L + MURO) + 18, Y(W), Y(0), String(cm(W)), T.tinta2, X(L + MURO) + 2);
     // Posición de la bomba desde las dos paredes más cercanas
     const xw = pb[0] < L / 2 ? 0 : L, yw = pb[1] < W / 2 ? 0 : W;
     const dxm = Math.abs(pb[0] - xw), dym = Math.abs(pb[1] - yw);
     if (dxm > 0.08) {
       trazo(c, [[X(xw), Y(pb[1])], [X(pb[0]) - Math.sign(pb[0] - xw) * 14, Y(pb[1])]], T.acento, 0.9, [1, 3]);
-      texto(c, String(cm(dxm)), X((xw + pb[0]) / 2), Y(pb[1]) + 10, { tam: 11, mono: true, color: T.acento, alinea: "center" });
+      const s = String(cm(dxm)), tx = X((xw + pb[0]) / 2), tw = anchoTexto(c, s, 11, 500, true);
+      texto(c, s, tx, Y(pb[1]) + 10, { tam: 11, mono: true, color: T.acento, alinea: "center" });
+      R.tapa(tx - tw / 2 - 2, Y(pb[1]) + 3, tx + tw / 2 + 2, Y(pb[1]) + 17, 4);
     }
     if (dym > 0.08) {
       trazo(c, [[X(pb[0]), Y(yw)], [X(pb[0]), Y(pb[1]) + Math.sign(pb[1] - yw) * 14]], T.acento, 0.9, [1, 3]);
-      texto(c, String(cm(dym)), X(pb[0]) + 6, Y((yw + pb[1]) / 2), { tam: 11, mono: true, color: T.acento });
+      const s = String(cm(dym)), ty = Y((yw + pb[1]) / 2), tw = anchoTexto(c, s, 11, 500, true);
+      texto(c, s, X(pb[0]) + 6, ty, { tam: 11, mono: true, color: T.acento });
+      R.tapa(X(pb[0]) + 4, ty - 7, X(pb[0]) + 8 + tw, ty + 7, 4);
     }
   }
-  barraEscala(c, X(-MURO), Y(-MURO) + 30, esc);
+  barraEscala(c, R, X(-MURO), Y(-MURO) + 30, esc);
+
+  if (est.capas.nombres) {
+    const lado = Math.cos(az) >= 0 ? ["o", "no", "so", "n", "s"] : ["e", "ne", "se", "n", "s"];
+    R.pide("bomba de mezcla", X(pb[0]), Y(pb[1]), { r: 12, color: T.acento, peso: 600, prio: 10, pref: lado });
+    R.pide("bomba de pozo", X(px), Y(py), { r: rPozo + 4, prio: 8, pref: ["s", "so", "se", "o", "e"] });
+    R.pide(juntos ? "flotador y dosis" : "flotador", X(lx), Y(ly), { r: rFlot + 2, prio: 7 });
+    if (!juntos) R.pide("dosis", dosisXY[0], dosisXY[1] - 2, { r: 8, prio: 6 });
+    R.pide("sonda ORP", X(punta[0]), Y(punta[1]), { r: 7, prio: 6, pref: ["se", "e", "s", "ne"] });
+    const etq = ray.donde === "fondo" ? "pega en el fondo" : ray.donde === "superficie" ? "sale arriba" : "pega en la pared";
+    R.pide(etq, X(ray.fin[0]), Y(ray.fin[1]), { r: 7, color: colorRayo, prio: 5 });
+    R.pide("boca", X(bx - BOCA / 2), Y(by + BOCA / 2), { r: 2, prio: 4, pref: ["no", "n", "o", "ne"] });
+    R.pide(`mástil ${cfg.angulo_tubo}°`, X((bx + punta[0]) / 2), Y((by + punta[1]) / 2), { r: 4, prio: 3 });
+    R.resuelve();
+  }
 }
 
 // ---------- corte ----------
@@ -756,6 +904,7 @@ function overlayPlanta(v) {
 function overlayCorte(v) {
   const c = limpiaOverlay(v);
   const { X, Y, esc } = v;
+  const R = creaRotulos(c, v.w, v.h, tamRotulo(v));
   const pc = v.pc = planoCorte();
   const { h0, h1 } = pc;
   const zt = cfg.z_tapa, N = cfg.nivel;
@@ -774,13 +923,13 @@ function overlayCorte(v) {
   c.rect(X(b1), Y(zt + LOSA), (h1 + MURO - b1) * esc, LOSA * esc);
   c.fillStyle = patron;
   c.fill();
-  c.strokeStyle = T.tinta;
-  c.lineWidth = 1.6;
   trazo(c, [[X(b0), Y(zt)], [X(h0), Y(zt)], [X(h0), Y(0)], [X(h1), Y(0)], [X(h1), Y(zt)], [X(b1), Y(zt)]], T.tinta, 1.6);
   trazo(c, [[X(b0), Y(zt + LOSA)], [X(h0 - MURO), Y(zt + LOSA)], [X(h0 - MURO), Y(-MURO)], [X(h1 + MURO), Y(-MURO)],
     [X(h1 + MURO), Y(zt + LOSA)], [X(b1), Y(zt + LOSA)]], T.tinta, 1);
   trazo(c, [[X(b0), Y(zt)], [X(b0), Y(zt + LOSA)]], T.tinta, 1);
   trazo(c, [[X(b1), Y(zt)], [X(b1), Y(zt + LOSA)]], T.tinta, 1);
+  R.tapa(X(h0 - MURO), Y(zt + LOSA), X(b0), Y(zt), 0.3);
+  R.tapa(X(b1), Y(zt + LOSA), X(h1 + MURO), Y(zt), 0.3);
 
   // Nivel del agua
   trazo(c, [[X(h0), Y(N)], [X(h1), Y(N)]], T.agua, 1.6);
@@ -793,11 +942,12 @@ function overlayCorte(v) {
   c.fillStyle = T.agua;
   c.fill();
   for (const [dw, dy] of [[8, 4], [5, 8]]) trazo(c, [[X(hn) - dw, Y(N) + dy], [X(hn) + dw, Y(N) + dy]], T.agua, 1);
+  R.tapa(X(hn) - 8, Y(N) - 11, X(hn) + 8, Y(N) + 9, 3);
 
   // Bomba de pozo colgando con su rejilla
-  const [pp, pd] = P(cfg.pozo[0], cfg.pozo[1]);
+  const [pp, pdist] = P(cfg.pozo[0], cfg.pozo[1]);
   const zr = cfg.pozo[2];
-  const lejos = Math.abs(pd) > 0.3;
+  const lejos = Math.abs(pdist) > 0.3;
   c.globalAlpha = lejos ? 0.45 : 1;
   const r = Math.max(4, (POZO_DIAM / 2) * esc);
   const z0 = Math.max(0.03, zr - 0.30), z1 = zr + 0.35;
@@ -811,6 +961,9 @@ function overlayCorte(v) {
   for (let i = -2; i <= 2; i++) c.fillRect(X(pp) - r + 2, Y(zr + i * 0.012) - 0.6, 2 * r - 4, 1.2);
   c.globalAlpha = 1;
   marcaSonda(c, X(pp) + r + 8, Y(zr), T.s[1]);
+  R.tapa(X(pp) - r - 1, Y(z1), X(pp) + r + 1, Y(z0), 3);
+  R.linea(X(pp), Y(z1), X(pp), Y(zt + LOSA + 0.22), 3, 1.5);
+  R.punto(X(pp) + r + 8, Y(zr), 6, 3);
 
   // Flotador
   const [hl] = P(cfg.llenado[0], cfg.llenado[1]);
@@ -821,14 +974,17 @@ function overlayCorte(v) {
   trazo(c, [[X(hw), Y(zv)], [X(hlc), Y(zv)]], T.tinta2, Math.max(2, 0.021 * esc));
   const bola = [hlc - lado * 0.16, N];
   trazo(c, [[X(hlc), Y(zv)], [X(bola[0]), Y(bola[1])]], T.tinta2, 1.2);
+  const rBola = Math.max(4, 0.06 * esc);
   c.beginPath();
-  c.arc(X(bola[0]), Y(bola[1]), Math.max(4, 0.06 * esc), 0, Math.PI * 2);
+  c.arc(X(bola[0]), Y(bola[1]), rBola, 0, Math.PI * 2);
   c.fillStyle = T.papel;
   c.fill();
   c.strokeStyle = T.tinta;
   c.lineWidth = 1.3;
   c.stroke();
   if (cfg.consumo_lpm > 0) trazo(c, [[X(hlc), Y(zv)], [X(hlc), Y(N)]], T.agua, 1.5, [3, 3]);
+  R.linea(X(hw), Y(zv), X(hlc), Y(zv), 2, 1);
+  R.linea(X(hlc), Y(zv), X(bola[0]), Y(bola[1]), 2, 1);
 
   // Mástil, travesaño y sondas
   const punta = geo.punto_tubo(cfg.z_orp);
@@ -836,12 +992,17 @@ function overlayCorte(v) {
   c.fillStyle = T.tinta2;
   c.fillRect(X(hb) - 3, Y(zt) - 3, 6, 6);
   trazo(c, [[X(hb), Y(zt)], [X(ht), Y(cfg.z_orp)]], T.tinta2, Math.max(2.5, TUBO * esc));
+  R.linea(X(hb), Y(zt), X(ht), Y(cfg.z_orp), 3, 1.5);
   marcaSonda(c, X(ht), Y(cfg.z_orp), T.s[2]);
   marcaSonda(c, X(hb), Y(N - 0.10), T.s[0]);
+  R.punto(X(hb), Y(N - 0.10), 6, 3);
 
   // Dosis
+  const juntos = dosisJuntoAlFlotador();
   const [hd] = P(geo.punto_dosis[0], geo.punto_dosis[1]);
-  marcaDosis(c, X(clamp(hd, h0, h1)), Y(geo.punto_dosis[2]) - 2);
+  const dosisXY = juntos ? [X(bola[0]) - lado * (rBola + 8), Y(N) - 8] : [X(clamp(hd, h0, h1)), Y(geo.punto_dosis[2]) - 2];
+  marcaDosis(c, dosisXY[0], dosisXY[1]);
+  R.punto(dosisXY[0], dosisXY[1] - 2, 7, 3);
 
   // Bomba de mezcla, chorro y cotas de altura
   const pb = geo.pos_bomba, d = geo.dir_chorro;
@@ -851,11 +1012,13 @@ function overlayCorte(v) {
   const [hf] = P(ray.fin[0], ray.fin[1]);
   const colorRayo = avisoRejilla || ray.donde === "fondo" ? T.peligro : T.acento;
   trazo(c, [[X(hp), Y(pb[2])], [X(hf), Y(ray.fin[2])]], colorRayo, 1.2, [2, 4]);
+  R.linea(X(hp), Y(pb[2]), X(hf), Y(ray.fin[2]), 2, 0.3);
   tache(c, X(hf), Y(ray.fin[2]), colorRayo);
   const nd = Math.hypot(dh, d[2]) || 1;
   const lf = 0.45;
   const tip = [hp + (dh / nd) * lf, pb[2] + (d[2] / nd) * lf];
   flecha(c, X(hp), Y(pb[2]), X(tip[0]), Y(tip[1]), T.acento, 2.5, 10);
+  R.linea(X(hp), Y(pb[2]), X(tip[0]), Y(tip[1]), 4, 2);
   cuerpoMibee(c, X(hp), Y(pb[2]), -Math.atan2(d[2], dh), esc);
   manija(v, "bomba-z", X(hp), Y(pb[2]), 15);
   if (est.corte === "chorro") {
@@ -866,46 +1029,53 @@ function overlayCorte(v) {
     c.strokeStyle = T.acento;
     c.lineWidth = 2;
     c.stroke();
+    R.punto(X(tip[0]), Y(tip[1]), 9, 3);
     v.manijas.push({ id: "chorro-el", x: X(tip[0]), y: Y(tip[1]), r: 20 });
-  }
-
-  if (est.capas.nombres) {
-    const n = (s, x, y, o) => texto(c, s, x, y, { tam: 12, color: T.tinta2, ...o });
-    n(lejos ? "bomba de pozo (fuera del corte)" : "bomba de pozo", X(pp) - r - 4, Y(z1) - 10, { alinea: "right" });
-    n("flotador", X(bola[0]), Y(N) - 16, { alinea: "center" });
-    n("boca", X(hb), Y(zt + LOSA) - 9, { alinea: "center" });
-    n("sonda ORP", X(ht) + 10, Y(cfg.z_orp) + 13);
-    const izq = dh >= 0;
-    n("bomba de mezcla", X(hp) + (izq ? -14 : 14), Y(pb[2]) - 14, { alinea: izq ? "right" : "left", color: T.acento, peso: 600 });
-    n(`nivel ${cm(N)}`, X(hn) + 10, Y(N) - 7, { color: T.agua, tam: 11 });
-    if (ray.donde === "fondo") n("pega en el fondo", X(hf), Y(0) - 10, { color: colorRayo, tam: 11, alinea: "center" });
   }
 
   if (est.capas.cotas) {
     const xr = X(h1 + MURO);
-    cotaV(c, xr + 14, Y(N), Y(0), String(cm(N)), T.agua, X(h1) + 2);
-    cotaV(c, xr + 34, Y(zt), Y(0), String(cm(zt)), T.tinta2, xr + 2);
-    cotaV(c, X(pp) - r - 12, Y(zr), Y(0), String(cm(zr)), T.tinta2, X(pp) - r, -1);
+    cotaV(c, R, xr + 14, Y(N), Y(0), String(cm(N)), T.agua, X(h1) + 2);
+    cotaV(c, R, xr + 34, Y(zt), Y(0), String(cm(zt)), T.tinta2, xr + 2);
+    cotaV(c, R, X(pp) - r - 12, Y(zr), Y(0), String(cm(zr)), T.tinta2, X(pp) - r, -1);
+    // Altura de la bomba y de la sonda ORP: del lado contrario al chorro y, si quedan juntas, una por lado.
     const ladoB = dh >= 0 ? -1 : 1;
-    cotaV(c, X(hp) + ladoB * 16, Y(pb[2]), Y(0), String(cm(pb[2])), T.acento, X(hp), ladoB);
-    cotaV(c, X(ht) + 14, Y(cfg.z_orp), Y(0), String(cm(cfg.z_orp)), T.s[2], X(ht) + 6);
+    const xb = X(hp) + ladoB * 18;
+    let xo = X(ht) + (ht >= hp ? 14 : -14);
+    if (Math.abs(xo - xb) < 22) xo = xb + ladoB * 24;
+    cotaV(c, R, xb, Y(pb[2]), Y(0), String(cm(pb[2])), T.acento, X(hp), ladoB);
+    cotaV(c, R, xo, Y(cfg.z_orp), Y(0), String(cm(cfg.z_orp)), T.s[2], X(ht), xo >= X(ht) ? 1 : -1);
     const txtLargo = est.corte === "largo" ? String(cm(h1 - h0)) : `${cm(h1 - h0)} por el chorro`;
-    cotaH(c, X(h0), X(h1), Y(-MURO) + 18, txtLargo, T.tinta2, Y(-MURO) + 2);
+    cotaH(c, R, X(h0), X(h1), Y(-MURO) + 18, txtLargo, T.tinta2, Y(-MURO) + 2);
   }
-  barraEscala(c, X(h0 - MURO), Y(-MURO) + 30, esc);
-  texto(c, "A", X(h0 - MURO) - 12, Y(zt + LOSA + 0.15), { tam: 11, peso: 700, color: T.tinta2, alinea: "center" });
-  texto(c, "A", X(h1 + MURO) + 12, Y(zt + LOSA + 0.15), { tam: 11, peso: 700, color: T.tinta2, alinea: "center" });
+  barraEscala(c, R, X(h0 - MURO), Y(-MURO) + 30, esc);
+  for (const [xa, al] of [[X(h0 - MURO) - 10, "center"], [X(h1 + MURO) + 10, "center"]]) {
+    texto(c, "A", xa, Y(zt + LOSA + 0.15), { tam: 11, peso: 700, color: T.tinta2, alinea: al });
+    R.punto(xa, Y(zt + LOSA + 0.15), 7, 4);
+  }
+
+  if (est.capas.nombres) {
+    const izq = dh >= 0;
+    R.pide("bomba de mezcla", X(hp), Y(pb[2]), { r: 12, color: T.acento, peso: 600, prio: 10, pref: izq ? ["no", "o", "n", "so"] : ["ne", "e", "n", "se"] });
+    R.pide("bomba de pozo", X(pp), Y((z0 + z1) / 2), { r: r + 2, prio: 8, pref: ["o", "e", "no", "ne"] });
+    R.pide(juntos ? "flotador y dosis" : "flotador", X(bola[0]), Y(N), { r: rBola + 2, prio: 7, pref: ["n", "ne", "no", "e", "o"] });
+    if (!juntos) R.pide("dosis", dosisXY[0], dosisXY[1] - 2, { r: 8, prio: 6 });
+    R.pide("boca", X(hb), Y(zt + LOSA), { r: 3, prio: 6, pref: ["n", "ne", "no"] });
+    R.pide("sonda ORP", X(ht), Y(cfg.z_orp), { r: 7, prio: 6, pref: ["e", "o", "se", "ne"] });
+    R.pide(`nivel ${cm(N)}`, X(hn), Y(N) - 6, { r: 7, color: T.agua, prio: 5, pref: ["e", "ne", "o", "no"] });
+    if (ray.donde === "fondo") R.pide("pega en el fondo", X(hf), Y(ray.fin[2]), { r: 7, color: colorRayo, prio: 5, pref: ["n", "ne", "no"] });
+    R.resuelve();
+  }
 }
 
 // ---------- fondo: cloro o rapidez ----------
 
 function valorFondo() {
-  const cf = sim.cFinal > 0 ? sim.cFinal : 1;
   if (est.fondo === "vel") {
     const a = snap.spd, e = snap.vEsc;
     return (m) => a[m] / e;
   }
-  const a = sim.c, e = 2 * cf;
+  const a = sim.c, e = 2 * (sim.cFinal > 0 ? sim.cFinal : 1);
   return (m) => a[m] / e;
 }
 
@@ -943,11 +1113,11 @@ function pintaFondoPlanta(v) {
     }
   }
   v.ictx.putImageData(im, 0, 0);
-  v.ext = [0, sim.cfg.largo, 0, sim.cfg.ancho];
+  v.ext = [0, sim.L, 0, sim.W];
 }
 
 function pintaFondoCorte(v) {
-  const { nx, ny, nz, dx, dy, dz } = sim;
+  const { nx, ny, nz, dx, dy } = sim;
   const pc = planoCorte();
   const val = valorFondo();
   let ncol, muestra;
@@ -976,17 +1146,20 @@ function pintaFondoCorte(v) {
     for (let k = 0; k < nz; k++) ponPixel(im.data, ((nz - 1 - k) * ncol + col) * 4, muestra(col, k));
   }
   v.ictx.putImageData(im, 0, 0);
-  v.ext = est.corte === "largo" ? [0, sim.cfg.largo, 0, sim.cfg.nivel] : [pc.h0, pc.h1, 0, sim.cfg.nivel];
+  v.ext = est.corte === "largo" ? [0, sim.L, 0, sim.H] : [pc.h0, pc.h1, 0, sim.H];
 }
 
 // ---------- partículas ----------
+// Posiciones en metros (3D) y estela en píxeles CSS. Se rasterizan en un ImageData propio:
+// miles de trazos con stroke() cuestan decenas de ms por cuadro en un canvas sin GPU.
 
 function creaParticulas(v) {
-  const n = Math.round(clamp((v.w * v.h) / (v.tipo === "planta" ? 160 : 190), 250, 1100));
+  const n = Math.round(clamp((v.w * v.h) / (v.tipo === "planta" ? 150 : 170), 250, 1400));
   const P = {
     n, x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n),
     edad: new Float32Array(n), vida: new Float32Array(n),
     hx: new Float32Array(n * ESTELA), hy: new Float32Array(n * ESTELA), cuenta: new Uint8Array(n), cab: 0,
+    pix: new Int32Array(n * ESTELA * 8), alfa: new Uint8Array(n * ESTELA * 8),
   };
   for (let k = 0; k < n; k++) {
     siembra(v, P, k);
@@ -1003,7 +1176,7 @@ function siembra(v, P, k) {
     y = 0.02 + Math.random() * (W - 0.04);
     z = est.planta === "promedio" ? Math.random() * H : clamp(est.zPlanta + (Math.random() - 0.5) * 0.24, 0.01, H - 0.01);
   } else {
-    const pc = planoCorte();
+    const pc = v.pc;
     for (let intento = 0; intento < 12; intento++) {
       const s = pc.h0 + Math.random() * (pc.h1 - pc.h0);
       const d = (Math.random() * 2 - 1) * FRANJA;
@@ -1023,6 +1196,8 @@ function siembra(v, P, k) {
   P.cuenta[k] = 0;
 }
 
+const velA = [0, 0, 0];
+
 function mueveParticulas(v, dtp, dtReal) {
   if (!snap.uc) return;
   if (!v.P) v.P = creaParticulas(v);
@@ -1031,29 +1206,40 @@ function mueveParticulas(v, dtp, dtReal) {
   const hmin = Math.min(snap.dx, snap.dy, snap.dz);
   const nsub = clamp(Math.ceil((dtp * snap.vmax) / (0.5 * hmin)), 1, 6);
   const h = dtp / nsub;
-  const pc = v.tipo === "corte" ? planoCorte() : null;
+  const pc = v.tipo === "corte" ? v.pc : null;
   const capa = v.tipo === "planta" && est.planta !== "promedio";
+  const zc = est.zPlanta;
+  const { X, Y } = v;
   P.cab = (P.cab + 1) % ESTELA;
-  const vel = [0, 0, 0];
+  const vel = velA;
   for (let k = 0; k < P.n; k++) {
     let x = P.x[k], y = P.y[k], z = P.z[k];
-    for (let s = 0; s < nsub; s++) {
-      velEn(x, y, z, vel);
-      const xm = x + 0.5 * h * vel[0], ym = y + 0.5 * h * vel[1], zm = z + 0.5 * h * vel[2];
-      velEn(xm, ym, zm, vel);
-      x += h * vel[0];
-      y += h * vel[1];
-      z += h * vel[2];
+    if (dtp > 0) {
+      for (let s = 0; s < nsub; s++) {
+        velEn(x, y, z, vel);
+        const xm = x + 0.5 * h * vel[0], ym = y + 0.5 * h * vel[1], zm = z + 0.5 * h * vel[2];
+        velEn(xm, ym, zm, vel);
+        x += h * vel[0];
+        y += h * vel[1];
+        z += h * vel[2];
+      }
     }
     P.edad[k] += dtReal;
     let fuera = x < 0.005 || x > L - 0.005 || y < 0.005 || y > W - 0.005 || z < 0.005 || z > H - 0.005 || P.edad[k] > P.vida[k];
-    if (!fuera && capa && Math.abs(z - est.zPlanta) > 0.15) fuera = true;
-    if (!fuera && pc && Math.abs(proy(pc, x, y)[1]) > FRANJA * 1.2) fuera = true;
+    let s = 0;
+    if (pc) {
+      const ex = x - pc.o[0], ey = y - pc.o[1];
+      s = ex * pc.h[0] + ey * pc.h[1];
+      if (Math.abs(ex * pc.n[0] + ey * pc.n[1]) > FRANJA * 1.2) fuera = true;
+    } else if (capa && Math.abs(z - zc) > 0.15) {
+      fuera = true;
+    }
     if (fuera) {
       siembra(v, P, k);
       x = P.x[k];
       y = P.y[k];
       z = P.z[k];
+      if (pc) s = (x - pc.o[0]) * pc.h[0] + (y - pc.o[1]) * pc.h[1];
     } else {
       P.x[k] = x;
       P.y[k] = y;
@@ -1061,99 +1247,129 @@ function mueveParticulas(v, dtp, dtReal) {
     }
     const i = k * ESTELA + P.cab;
     if (pc) {
-      P.hx[i] = proy(pc, x, y)[0];
-      P.hy[i] = z;
+      P.hx[i] = X(s);
+      P.hy[i] = Y(z);
     } else {
-      P.hx[i] = x;
-      P.hy[i] = y;
+      P.hx[i] = X(x);
+      P.hy[i] = Y(y);
     }
     P.cuenta[k] = Math.min(ESTELA, P.cuenta[k] + 1);
   }
 }
 
-function dibujaParticulas(c, v) {
+// Estelas a píxel: primero un halo de 3x3 del color del papel, luego la tinta encima.
+function rasterParticulas(v) {
   const P = v.P;
-  if (!P) return;
-  const paths = [new Path2D(), new Path2D(), new Path2D()];
-  const { X, Y } = v;
+  if (!P || !v.c32) return false;
+  const W = v.w, H = v.h, buf = v.c32;
+  buf.fill(0);
+  const pix = P.pix, alfa = P.alfa;
+  let n = 0;
+  const cap = pix.length;
   for (let k = 0; k < P.n; k++) {
-    const n = P.cuenta[k];
-    if (n < 2) continue;
+    const cnt = P.cuenta[k];
+    if (cnt < 1) continue;
     const base = k * ESTELA;
-    for (let a = 0; a < n - 1; a++) {
-      const i1 = base + ((P.cab - a + ESTELA) % ESTELA);
-      const i0 = base + ((P.cab - a - 1 + ESTELA) % ESTELA);
-      const p = paths[Math.min(2, ((a * 3) / (ESTELA - 1)) | 0)];
-      p.moveTo(X(P.hx[i1]), Y(P.hy[i1]));
-      p.lineTo(X(P.hx[i0]), Y(P.hy[i0]));
+    let ix = base + P.cab;
+    let x1 = P.hx[ix], y1 = P.hy[ix];
+    for (let a = 0; a < cnt; a++) {
+      const al = (235 * (1 - a / ESTELA)) | 0;
+      let x0 = x1, y0 = y1;
+      if (a + 1 < cnt) {
+        ix = base + ((P.cab - a - 1 + ESTELA) % ESTELA);
+        x0 = P.hx[ix];
+        y0 = P.hy[ix];
+      }
+      const pasos = Math.min(8, Math.max(1, Math.ceil(Math.max(Math.abs(x0 - x1), Math.abs(y0 - y1)))));
+      for (let q = 0; q < pasos && n < cap; q++) {
+        const t = q / pasos;
+        const px = (x1 + (x0 - x1) * t) | 0, py = (y1 + (y0 - y1) * t) | 0;
+        if (px < 1 || py < 1 || px >= W - 1 || py >= H - 1) continue;
+        pix[n] = py * W + px;
+        alfa[n++] = al;
+      }
+      x1 = x0;
+      y1 = y0;
+      if (a + 1 >= cnt) break;
     }
   }
-  c.lineCap = "round";
-  const alfas = [0.95, 0.6, 0.3];
-  c.strokeStyle = T.papel;
-  c.lineWidth = 3.2;
-  for (let b = 0; b < 3; b++) {
-    c.globalAlpha = alfas[b] * 0.55;
-    c.stroke(paths[b]);
+  const [hr, hg, hb] = T.haloRgb, [tr, tg, tb] = T.tintaRgb;
+  const haloRgb = (hb << 16) | (hg << 8) | hr;
+  for (let q = 0; q < n; q++) {
+    const ah = (alfa[q] * 0.55) | 0;
+    const p0 = pix[q] - W - 1;
+    for (let f = 0; f < 3; f++) {
+      const pf = p0 + f * W;
+      for (let e = 0; e < 3; e++) {
+        const ex = buf[pf + e] >>> 24;
+        if (ex < ah) buf[pf + e] = ((ah << 24) | haloRgb) >>> 0;
+      }
+    }
   }
-  c.strokeStyle = T.tinta;
-  c.lineWidth = 1.3;
-  for (let b = 0; b < 3; b++) {
-    c.globalAlpha = alfas[b];
-    c.stroke(paths[b]);
+  for (let q = 0; q < n; q++) {
+    const p = pix[q], ai = alfa[q] / 255;
+    const e = buf[p], ea = (e >>> 24) / 255;
+    const oa = ai + ea * (1 - ai);
+    const ke = (ea * (1 - ai)) / oa, ki = ai / oa;
+    const r = tr * ki + (e & 255) * ke, g = tg * ki + ((e >>> 8) & 255) * ke, b = tb * ki + ((e >>> 16) & 255) * ke;
+    buf[p] = (((oa * 255) << 24) | (b << 16) | (g << 8) | r) >>> 0;
   }
-  c.globalAlpha = 1;
-  c.lineCap = "butt";
+  v.cctx.putImageData(v.cimg, 0, 0);
+  return true;
 }
 
 function dibujaFlechas(c, v) {
   if (!snap.uc) return;
-  const { L, W, H, nz } = snap;
-  const lmax = 0.17, vr = snap.vEsc;
-  const p = new Path2D();
-  const cabezas = new Path2D();
-  const una = (x0, y0, ux, uy) => {
-    const s = Math.hypot(ux, uy);
-    const l = Math.min(1, s / vr) * lmax;
-    if (l < 0.015) return;
-    const ax = (ux / s) * l, ay = (uy / s) * l;
-    const X0 = v.X(x0 - ax / 2), Y0 = v.Y(y0 - ay / 2), X1 = v.X(x0 + ax / 2), Y1 = v.Y(y0 + ay / 2);
-    p.moveTo(X0, Y0);
-    p.lineTo(X1, Y1);
-    const a = Math.atan2(Y1 - Y0, X1 - X0);
-    cabezas.moveTo(X1, Y1);
-    cabezas.lineTo(X1 - 5 * Math.cos(a - 0.45), Y1 - 5 * Math.sin(a - 0.45));
-    cabezas.lineTo(X1 - 5 * Math.cos(a + 0.45), Y1 - 5 * Math.sin(a + 0.45));
-    cabezas.closePath();
-  };
-  const vel = [0, 0, 0];
-  if (v.tipo === "planta") {
-    for (let x = 0.1; x < L; x += 0.2) {
-      for (let y = 0.1; y < W; y += 0.2) {
-        let ux = 0, uy = 0;
-        if (est.planta === "promedio") {
-          for (let k = 0; k < nz; k++) {
-            velEn(x, y, (k + 0.5) * snap.dz, vel);
-            ux += vel[0] / nz;
-            uy += vel[1] / nz;
+  if (!v.flechas || v.flechas.n !== nSnap) {
+    const { L, W, H, nz } = snap;
+    const lmax = 0.17, vr = snap.vEsc;
+    const p = new Path2D();
+    const cabezas = new Path2D();
+    const una = (x0, y0, ux, uy) => {
+      const s = Math.hypot(ux, uy);
+      const l = Math.min(1, s / vr) * lmax;
+      if (l < 0.015) return;
+      const ax = (ux / s) * l, ay = (uy / s) * l;
+      const X0 = v.X(x0 - ax / 2), Y0 = v.Y(y0 - ay / 2), X1 = v.X(x0 + ax / 2), Y1 = v.Y(y0 + ay / 2);
+      p.moveTo(X0, Y0);
+      p.lineTo(X1, Y1);
+      const a = Math.atan2(Y1 - Y0, X1 - X0);
+      cabezas.moveTo(X1, Y1);
+      cabezas.lineTo(X1 - 5 * Math.cos(a - 0.45), Y1 - 5 * Math.sin(a - 0.45));
+      cabezas.lineTo(X1 - 5 * Math.cos(a + 0.45), Y1 - 5 * Math.sin(a + 0.45));
+      cabezas.closePath();
+    };
+    const vel = [0, 0, 0];
+    if (v.tipo === "planta") {
+      for (let x = 0.1; x < L; x += 0.2) {
+        for (let y = 0.1; y < W; y += 0.2) {
+          let ux = 0, uy = 0;
+          if (est.planta === "promedio") {
+            for (let k = 0; k < nz; k++) {
+              velEn(x, y, (k + 0.5) * snap.dz, vel);
+              ux += vel[0] / nz;
+              uy += vel[1] / nz;
+            }
+          } else {
+            velEn(x, y, est.zPlanta, vel);
+            ux = vel[0];
+            uy = vel[1];
           }
-        } else {
-          velEn(x, y, est.zPlanta, vel);
-          ux = vel[0];
-          uy = vel[1];
+          una(x, y, ux, uy);
         }
-        una(x, y, ux, uy);
+      }
+    } else {
+      const pc = v.pc;
+      for (let s = pc.h0 + 0.1; s < pc.h1; s += 0.2) {
+        for (let z = 0.075; z < H; z += 0.15) {
+          velEn(pc.o[0] + s * pc.h[0], pc.o[1] + s * pc.h[1], z, vel);
+          una(s, z, vel[0] * pc.h[0] + vel[1] * pc.h[1], vel[2]);
+        }
       }
     }
-  } else {
-    const pc = planoCorte();
-    for (let s = pc.h0 + 0.1; s < pc.h1; s += 0.2) {
-      for (let z = 0.075; z < H; z += 0.15) {
-        velEn(pc.o[0] + s * pc.h[0], pc.o[1] + s * pc.h[1], z, vel);
-        una(s, z, vel[0] * pc.h[0] + vel[1] * pc.h[1], vel[2]);
-      }
-    }
+    v.flechas = { n: nSnap, p, cabezas };
   }
+  const { p, cabezas } = v.flechas;
   c.strokeStyle = T.papel;
   c.lineWidth = 3;
   c.globalAlpha = 0.6;
@@ -1191,18 +1407,21 @@ function dibujaVista(v) {
     }
   }
   if (est.capas.flechas) dibujaFlechas(c, v);
-  if (est.capas.part) dibujaParticulas(c, v);
+  if (est.capas.part && v.P) {
+    c.imageSmoothingEnabled = true;
+    c.drawImage(v.capa, 0, 0, v.w, v.h);
+  }
   c.drawImage(v.over, 0, 0, v.w, v.h);
 }
 
 // ---------- gráfica ----------
 
-const graf = { canvas: $("c-grafica"), w: 0, h: 0, dpr: 1, m: { l: 44, r: 12, t: 14, b: 26 }, xMax: 30, yMax: 1.5 };
+const graf = { canvas: $("c-grafica"), w: 0, h: 0, dpr: 1, m: { l: 44, r: 12, t: 24, b: 26 }, xMax: 30, yMax: 1.5 };
 graf.ctx = graf.canvas.getContext("2d");
 
 function dimensionaGrafica() {
   const w = graf.canvas.parentElement.clientWidth;
-  const h = window.innerWidth < 760 ? 170 : 190;
+  const h = window.innerWidth < 760 ? 180 : 200;
   const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   graf.w = w;
   graf.h = h;
@@ -1238,7 +1457,6 @@ function dibujaGrafica() {
   const Y = (y) => m.t + (1 - Math.min(y, yMax) / yMax) * (h - m.t - m.b);
   graf.X = X;
 
-  c.font = fuente(11, 400, true);
   const yp = pasoBonito(yMax / 4);
   for (let y = 0; y <= yMax + 1e-9; y += yp) {
     trazo(c, [[m.l, Y(y)], [w - m.r, Y(y)]], T.linea, 1);
@@ -1247,8 +1465,8 @@ function dibujaGrafica() {
   for (let t = 0; t <= xMax; t += xp) {
     texto(c, String(t), X(t), h - m.b + 12, { tam: 11, mono: true, alinea: "center", color: T.tinta2, halo: false });
   }
-  texto(c, "min", w - m.r, h - 6, { tam: 11, alinea: "right", color: T.tinta3, halo: false });
-  texto(c, "mg/L", 4, 7, { tam: 11, color: T.tinta3, halo: false });
+  texto(c, "min", w - m.r, h - 5, { tam: 11, alinea: "right", color: T.tinta3, halo: false });
+  texto(c, "mg/L", m.l - 6, 8, { tam: 11, alinea: "right", color: T.tinta3, halo: false });
 
   // banda del rango de toda la cisterna
   c.beginPath();
@@ -1264,25 +1482,28 @@ function dibujaGrafica() {
   const meta = [];
   for (let i = 0; i < n; i++) meta.push([X(serie.t[i]), Y(serie.meta[i])]);
   if (meta.length > 1) trazo(c, meta, T.tinta2, 1.2, [5, 4]);
+  const marcas = [];
   const tf = corrida?.formula;
-  if (tf && dosisT.length) {
-    const xf = X(dosisT[0] / 60 + tf);
-    if (tf + dosisT[0] / 60 <= xMax) {
-      trazo(c, [[xf, m.t], [xf, h - m.b]], T.tinta3, 1, [1, 3]);
-      texto(c, "fórmula", xf + 3, m.t + 4, { tam: 11, color: T.tinta2 });
-    }
-  }
-  if (est.modo === "firmware" && apagaEn / 60 <= xMax) {
-    const xa = X(apagaEn / 60);
-    trazo(c, [[xa, m.t], [xa, h - m.b]], T.tinta3, 1, [4, 3]);
-    texto(c, "bomba se apaga", xa - 3, m.t + 4, { tam: 11, color: T.tinta2, alinea: "right" });
+  if (tf && dosisT.length && tf + dosisT[0] / 60 <= xMax) marcas.push([dosisT[0] / 60 + tf, "fórmula", [1, 3]]);
+  if (est.modo === "firmware" && apagaEn / 60 <= xMax) marcas.push([apagaEn / 60, "bomba se apaga", [4, 3]]);
+  marcas.sort((a, b) => a[0] - b[0]);
+  let finIzq = -Infinity;
+  for (const [tm, etq, guion] of marcas) {
+    const xm = X(tm);
+    trazo(c, [[xm, m.t], [xm, h - m.b]], T.tinta3, 1, guion);
+    const tw = anchoTexto(c, etq, 11);
+    const derecha = xm + 3 + tw <= w - m.r;
+    const x0 = derecha ? xm + 3 : xm - 3 - tw;
+    const y = x0 < finIzq + 4 ? m.t + 18 : m.t + 6;
+    texto(c, etq, derecha ? xm + 3 : xm - 3, y, { tam: 11, color: T.tinta2, alinea: derecha ? "left" : "right" });
+    finIzq = Math.max(finIzq, x0 + tw);
   }
   for (const td of dosisT) {
     const xd = X(td / 60);
     c.beginPath();
-    c.moveTo(xd - 5, m.t - 6);
-    c.lineTo(xd + 5, m.t - 6);
-    c.lineTo(xd, m.t + 2);
+    c.moveTo(xd - 5, m.t - 8);
+    c.lineTo(xd + 5, m.t - 8);
+    c.lineTo(xd, m.t);
     c.closePath();
     c.fillStyle = T.tinta;
     c.fill();
@@ -1352,50 +1573,56 @@ function fmtMin(x) {
   return x == null ? "-" : `${x.toFixed(1)} <small>min</small>`;
 }
 
+function pon(id, html) {
+  const el = $(id);
+  if (el._html !== html) {
+    el.innerHTML = html;
+    el._html = html;
+  }
+}
+
 function pintaLecturas() {
   if (!sim) return;
   const tm = (sim.t - tDosis) / 60;
-  $("l-tiempo").innerHTML = fmtMin(tm);
+  pon("l-tiempo", fmtMin(tm));
   const st = ultimo.stats, so = ultimo.sondas, cf = sim.cFinal;
   if (st) {
     const ok = st.cov < 0.05;
-    $("l-cov").innerHTML = `${st.cov.toFixed(2)}<span class="chip ${ok ? "ok" : "no"}">${ok ? "mezclada" : "falta"}</span>`;
-    $("l-rango").innerHTML = `${Math.round(st.cmin * 100)} a ${Math.round(st.cmax * 100)} <small>% meta</small>`;
+    pon("l-cov", `${st.cov.toFixed(2)}<span class="chip ${ok ? "ok" : "no"}">${ok ? "mezclada" : "falta"}</span>`);
+    pon("l-rango", `${Math.round(st.cmin * 100)} a ${Math.round(st.cmax * 100)} <small>%</small>`);
   }
-  $("l-meta").innerHTML = `${cf.toFixed(2)} <small>mg/L</small>`;
+  pon("l-meta", `${cf.toFixed(2)} <small>mg/L</small>`);
   if (so) {
-    Object.keys(so).slice(0, 3).forEach((n, k) => {
-      $(`l-s${k}`).innerHTML = `${so[n].toFixed(2)} <small>mg/L</small>`;
-    });
+    Object.keys(so).slice(0, 3).forEach((n, k) => pon(`l-s${k}`, `${so[n].toFixed(2)} <small>mg/L</small>`));
   }
   let estado;
-  if (est.modo === "siempre") estado = "siempre encendida";
+  if (est.modo === "siempre") estado = "encendida <small class=\"bloque\">siempre</small>";
   else if (est.modo === "apagada") estado = "apagada";
-  else estado = bombaEncendida() ? `encendida <small>se apaga en ${Math.max(0, (apagaEn - sim.t) / 60).toFixed(0)} min</small>` : "apagada <small>pasaron 45 min</small>";
-  $("l-estado").innerHTML = estado;
-  let op = null;
-  try {
-    op = puntoOperacion(cfg.q_max_lh, cfg.h_max_m, cfg.boquilla_mm, cfg.salida_mm, cfg.k_salida);
-  } catch {}
+  else estado = bombaEncendida()
+    ? `encendida <small class="bloque">se apaga en ${Math.max(0, Math.ceil((apagaEn - sim.t) / 60))} min</small>`
+    : "apagada <small class=\"bloque\">pasaron 45 min</small>";
+  pon("l-estado", estado);
+  const op = operacion();
   if (op) {
-    $("l-q").innerHTML = `${Math.round(op.q_lh)} <small>L/h</small>`;
-    $("l-u").innerHTML = `${op.u_ms.toFixed(2)} <small>m/s</small>`;
-    $("l-m").innerHTML = `${(op.m_m4s2 * 1e4).toFixed(1)}<small>×10⁻⁴ m⁴/s²</small>`;
-    $("l-formula").innerHTML = fmtMin(tiempoMezclaS(volumen(), op.m_m4s2) / 60);
+    pon("l-q", `${Math.round(op.q_lh)} <small>L/h</small>`);
+    pon("l-u", `${op.u_ms.toFixed(2)} <small>m/s</small>`);
+    pon("l-m", `${(op.m_m4s2 * 1e4).toFixed(1)}<small>×10⁻⁴ m⁴/s²</small>`);
+    pon("l-formula", fmtMin(tiempoMezclaS(volumen(), op.m_m4s2) / 60));
   }
-  $("l-sim5").innerHTML = deteccion.cov5 != null ? fmtMin(deteccion.cov5) : `<small>aún no</small>`;
-  $("l-sim10").innerHTML = deteccion.todo10 != null ? fmtMin(deteccion.todo10) : `<small>aún no</small>`;
+  pon("l-sim5", deteccion.cov5 != null ? fmtMin(deteccion.cov5) : `<small>aún no</small>`);
+  pon("l-sim10", deteccion.todo10 != null ? fmtMin(deteccion.todo10) : `<small>aún no</small>`);
   const pb = geo.pos_bomba;
   if (cfg.pos_bomba) {
     const hdist = Math.hypot(pb[0] - cfg.boca[0], pb[1] - cfg.boca[1]);
     const dz = cfg.z_tapa - pb[2];
-    $("l-montaje").innerHTML = `tubo de ${Math.hypot(hdist, dz).toFixed(2)} m a ${Math.round(Math.atan2(dz, hdist) / RAD)}° <small>desde el travesaño</small>`;
+    pon("l-montaje", `tubo de ${Math.hypot(hdist, dz).toFixed(2)} m a ${Math.round(Math.atan2(dz, hdist) / RAD)}° <small>desde el travesaño</small>`);
   } else {
     const ltubo = (cfg.z_tapa - pb[2]) / Math.sin(cfg.angulo_tubo * RAD);
-    $("l-montaje").innerHTML = `mástil a ${cfg.angulo_tubo}°, bomba a ${ltubo.toFixed(2)} m <small>del travesaño por el tubo</small>`;
+    pon("l-montaje", `mástil a ${cfg.angulo_tubo}°, bomba a ${ltubo.toFixed(2)} m <small>del travesaño por el tubo</small>`);
   }
   $("reloj-t").textContent = `${(sim.t / 60).toFixed(1)} min`;
-  $("reloj-v").textContent = !est.corriendo ? "en pausa" : timerReinicio ? "aplicando el cambio" : `simula a ${vSim < 10 ? vSim.toFixed(1) : Math.round(vSim)}x`;
+  const v = perf.vSim;
+  $("reloj-v").textContent = !est.corriendo ? "en pausa" : timerReinicio ? "aplicando el cambio" : v > 0 ? `simula a ${v < 10 ? v.toFixed(1) : Math.round(v)}x` : "arrancando";
   const cfLey = cf > 0 ? cf : 0.75;
   if (est.fondo === "vel") {
     $("leyenda-nombre").textContent = "Rapidez";
@@ -1408,14 +1635,17 @@ function pintaLecturas() {
     $("ley-1").textContent = `${cfLey.toFixed(2)} meta`;
     $("ley-2").textContent = `${(2 * cfLey).toFixed(2)} mg/L`;
   }
+  $("rendimiento").textContent = `Dibujo a ${Math.round(perf.fps)} cuadros/s. Motor en ${perf.motor}: `
+    + `${perf.motorPasoMs.toFixed(1)} ms por paso, malla de ${sim.nx}x${sim.ny}x${sim.nz}.`;
+}
+
+function pintaMotor() {
+  $("d-motor").textContent = perf.motor === "worker" ? "CFD 3D en segundo plano" : "CFD 3D en el hilo principal";
 }
 
 function pintaAvisos() {
-  const caja = $("avisos");
   const out = [];
-  if (!motorReal) {
-    out.push(`<p class="aviso"><b>Motor de prueba.</b> No encontré solver.js: el flujo que ves es falso y no sirve para decidir. La geometría y la fórmula sí son las reales.</p>`);
-  }
+  if (errorMotor) out.push(`<p class="aviso peligro"><b>El motor se detuvo.</b> ${errorMotor}. Recarga la página.</p>`);
   if (errorCfg) out.push(`<p class="aviso peligro"><b>No se aplicó el cambio.</b> ${errorCfg}. Sigue corriendo la configuración anterior.</p>`);
   const ray = rayoChorro();
   if (ray.dist < DIST_REJILLA) {
@@ -1424,16 +1654,15 @@ function pintaAvisos() {
   if (ray.donde === "fondo") {
     out.push(`<p class="aviso"><b>El chorro pega en el fondo</b> a ${cm(ray.t)} cm de la boquilla, a unos ${ray.uFin.toFixed(2)} m/s (estimado como chorro redondo libre): puede levantar lodo. Inclínalo menos o sube la bomba.</p>`);
   }
-  caja.innerHTML = out.join("");
+  pon("avisos", out.join(""));
 }
 
 function pintaCorridas() {
-  const cuerpo = $("corridas");
   const celda = (r, x) => x != null ? `${x.toFixed(1)} min` : r.activa ? "corriendo" : `&gt; ${r.tMax.toFixed(0)} min`;
-  cuerpo.innerHTML = corridas.map((r) => `<tr class="${r === corrida ? "actual" : ""}">
+  pon("corridas", corridas.map((r) => `<tr class="${r === corrida ? "actual" : ""}">
     <td class="num">${r.n}</td><td>${r.bomba}</td><td>${r.chorro}</td><td>${r.dosis}</td>
     <td class="num">${r.formula != null ? r.formula.toFixed(1) + " min" : "-"}</td>
-    <td class="num">${celda(r, r.cov5)}</td><td class="num">${celda(r, r.todo10)}</td></tr>`).join("");
+    <td class="num">${celda(r, r.cov5)}</td><td class="num">${celda(r, r.todo10)}</td></tr>`).join(""));
 }
 
 // ---------- controles ----------
@@ -1464,10 +1693,15 @@ const rangos = {
   dosis: { get: () => cfg.dosis_ml, set: (v) => (cfg.dosis_ml = v), fmt: (v) => `${v} mL`, reinicia: false },
 };
 
+function cambiaConsumo() {
+  motor?.manda({ tipo: "consumo", consumo_lpm: cfg.consumo_lpm });
+  for (const v of Object.values(vistas)) v.sucio = true;
+}
+
 function syncControles() {
   for (const [id, r] of Object.entries(rangos)) {
     const v = r.get();
-    $(id).value = v;
+    if (document.activeElement !== $(id)) $(id).value = v;
     $(`o-${id}`).textContent = r.fmt(v);
   }
   $("altura").max = Math.max(20, cm(cfg.nivel) - 10);
@@ -1494,10 +1728,12 @@ function valida() {
 function cambioCfg({ reinicia = true } = {}) {
   geo = geometria(copia(cfg));
   for (const v of Object.values(vistas)) v.sucio = true;
+  dimensiona(vistas.corte);
   syncControles();
   errorCfg = valida();
   pintaAvisos();
   pintaLecturas();
+  pintaSubtitulos();
   if (reinicia && !errorCfg) programaReinicio();
 }
 
@@ -1553,8 +1789,8 @@ $("seguir").addEventListener("click", () => {
 $("play").addEventListener("click", () => {
   est.corriendo = !est.corriendo;
   $("play").textContent = est.corriendo ? "Pausa" : "Seguir";
-  $("play").setAttribute("aria-pressed", String(est.corriendo));
-  deuda = 0;
+  $("play").setAttribute("aria-pressed", String(!est.corriendo));
+  mandaControl();
   pintaLecturas();
 });
 $("reiniciar").addEventListener("click", () => {
@@ -1562,17 +1798,14 @@ $("reiniciar").addEventListener("click", () => {
   timerReinicio = 0;
   arranca();
 });
-$("echar").addEventListener("click", () => {
-  echaCloro();
-  pintaLecturas();
-});
+$("echar").addEventListener("click", echaCloro);
 $("velocidad").addEventListener("change", (e) => {
   est.velocidad = Number(e.target.value);
-  deuda = 0;
+  mandaControl();
 });
 $("modo-bomba").addEventListener("change", (e) => {
   est.modo = e.target.value;
-  if (est.modo === "firmware") apagaEn = tDosis + APAGA_S;
+  mandaControl();
   graficaSucia = true;
 });
 $("malla").addEventListener("change", (e) => {
@@ -1590,6 +1823,7 @@ radios("planta", (v) => {
   est.planta = v;
   $("zplanta-caja").hidden = v !== "z";
   vistas.planta.P = null;
+  vistas.planta.flechas = null;
   fondoSucio = true;
   pintaSubtitulos();
 });
@@ -1609,12 +1843,12 @@ radios("lugar", (v) => {
   est.lugar = v;
   if (v !== "clic") cfg.lugar_dosis = v;
   cambioCfg({ reinicia: false });
-  pintaSubtitulos();
 });
 
 $("z-planta").addEventListener("input", (e) => {
   est.zPlanta = Number(e.target.value) / 100;
   $("o-z-planta").textContent = `${e.target.value} cm`;
+  vistas.planta.flechas = null;
   fondoSucio = true;
   pintaSubtitulos();
 });
@@ -1638,10 +1872,12 @@ function pintaSubtitulos() {
   $("t-planta-sub").textContent = est.planta === "promedio" ? "promedio de toda la columna" : `a ${Math.round(est.zPlanta * 100)} cm del fondo`;
   const p = geo.pos_bomba;
   $("t-corte-sub").textContent = est.corte === "largo" ? `A-A a lo largo, y = ${cm(p[1])} cm` : "A-A por el plano del chorro";
+  const [, pd] = proy(planoCorte(), cfg.pozo[0], cfg.pozo[1]);
   $("pie-corte").textContent = (est.corte === "largo"
     ? "Corte a lo largo por la bomba de mezcla."
     : "Corte por el plano del chorro: arrastra la punta de la flecha para inclinarlo.")
-    + " Arrastra la bomba para subirla o bajarla. Partículas a ±25 cm del corte.";
+    + " Arrastra la bomba para subirla o bajarla. Partículas a ±25 cm del corte."
+    + (Math.abs(pd) > 0.3 ? ` La bomba de pozo queda a ${cm(Math.abs(pd))} cm del corte y se ve tenue.` : "");
   let pie;
   if (est.editar) pie = "Editando: arrastra los cuadros de la boca, la bomba de pozo y el flotador.";
   else if (est.lugar === "clic") pie = Array.isArray(cfg.lugar_dosis) ? "Toca la planta para mover el punto de la dosis." : "Toca la planta donde vas a echar el cloro.";
@@ -1699,7 +1935,7 @@ function aplicaArrastre(v, m, px, py) {
       const pc = vistas.corte.pc;
       const p = geo.pos_bomba;
       const [hp] = proy(pc, p[0], p[1]);
-      cfg.elevacion = Math.round(Math.atan2(b - p[2], Math.max(a - hp, 0.001)) / RAD);
+      cfg.elevacion = clamp(Math.round(Math.atan2(b - p[2], Math.max(a - hp, 0.001)) / RAD), -90, 90);
       break;
     }
   }
@@ -1750,7 +1986,6 @@ function enlazaVista(v) {
         if (a > 0.02 && a < cfg.largo - 0.02 && b > 0.02 && b < cfg.ancho - 0.02) {
           cfg.lugar_dosis = [r2(a), r2(b), r2(cfg.nivel - 0.10)];
           cambioCfg({ reinicia: false });
-          pintaSubtitulos();
         }
       }
     }
@@ -1779,18 +2014,13 @@ const io = new IntersectionObserver((entradas) => {
 });
 for (const v of Object.values(vistas)) io.observe(v.canvas);
 
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-  leeTokens();
-  graficaSucia = true;
-});
-new MutationObserver(() => {
-  leeTokens();
-  graficaSucia = true;
-}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", leeTokens);
+new MutationObserver(leeTokens).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 document.fonts?.ready.then(() => {
   for (const v of Object.values(vistas)) v.sucio = true;
   graficaSucia = true;
 });
+document.addEventListener("visibilitychange", mandaControl);
 
 graf.canvas.addEventListener("pointermove", hoverGrafica);
 graf.canvas.addEventListener("pointerdown", hoverGrafica);
@@ -1801,34 +2031,42 @@ graf.canvas.addEventListener("pointerleave", () => {
 });
 
 let tAnterior = performance.now();
-let tFondo = 0, tLecturas = 0, tSnap = 0, tCorridas = 0;
+let tFondo = 0, tLecturas = 0, tCorridas = 0, snapFondo = -1;
 
 function cuadro(ahora) {
+  const t0 = performance.now();
   const dtReal = Math.min(0.1, Math.max(0, (ahora - tAnterior) / 1000));
+  if (dtReal > 0) media("fps", 1 / dtReal);
   tAnterior = ahora;
-  let avanzado = 0;
-  if (est.corriendo && sim) avanzado = avanzaSim(dtReal);
-  if (dtReal > 0 && est.corriendo) vSim = 0.92 * vSim + 0.08 * (avanzado / dtReal);
-  if (sim && avanzado > 0 && ahora - tSnap > 40) {
-    tomaSnapshot();
-    tSnap = ahora;
-  }
-  if (sim && ((avanzado > 0 && ahora - tFondo > 120) || fondoSucio)) {
+  if (sim && ((nSnap !== snapFondo && ahora - tFondo > 100) || fondoSucio)) {
+    const tf = performance.now();
     pintaFondoPlanta(vistas.planta);
     pintaFondoCorte(vistas.corte);
+    media("fondoMs", performance.now() - tf);
     tFondo = ahora;
+    snapFondo = nSnap;
     fondoSucio = false;
   }
-  const dtp = est.corriendo ? Math.min(DT_PART_MAX, vSim * dtReal) : 0;
-  if (sim && est.capas.part && dtp > 0) {
-    for (const v of Object.values(vistas)) if (v.visible) mueveParticulas(v, dtp, dtReal);
+  const dtp = est.corriendo ? Math.min(DT_PART_MAX, perf.vSim * dtReal) : 0;
+  if (sim && est.capas.part) {
+    const tp = performance.now();
+    for (const v of Object.values(vistas)) {
+      if (!v.visible) continue;
+      if (dtp > 0 || !v.P || !v.capaLista) {
+        mueveParticulas(v, dtp, dtReal);
+        v.capaLista = rasterParticulas(v);
+      }
+    }
+    media("particulasMs", performance.now() - tp);
   }
+  const tv = performance.now();
   for (const v of Object.values(vistas)) dibujaVista(v);
   if (graficaSucia) {
     dibujaGrafica();
     graficaSucia = false;
   }
-  if (ahora - tLecturas > 200) {
+  media("vistasMs", performance.now() - tv);
+  if (ahora - tLecturas > 250) {
     pintaLecturas();
     tLecturas = ahora;
   }
@@ -1836,18 +2074,21 @@ function cuadro(ahora) {
     pintaCorridas();
     tCorridas = ahora;
   }
+  media("cuadroMs", performance.now() - t0);
   requestAnimationFrame(cuadro);
 }
 
-$("d-motor").innerHTML = motorReal ? "CFD 3D, port de cisterna_sim" : `<span class="motor-prueba">de prueba (flujo falso)</span>`;
 leeTokens();
 for (const v of Object.values(vistas)) enlazaVista(v);
 redimensiona();
 syncControles();
 pintaSubtitulos();
+iniciaMotor();
+pintaMotor();
 arranca();
-redimensiona();
-pintaLecturas();
 requestAnimationFrame(cuadro);
 
-window.visor = { get sim() { return sim; }, cfg, est, get vSim() { return vSim; }, get costoPaso() { return costoPaso; } };
+window.visor = {
+  get sim() { return sim; }, cfg, est, perf,
+  get vSim() { return perf.vSim; }, get costoPaso() { return perf.motorPasoMs; },
+};

@@ -24,6 +24,8 @@
   --ramp-1: #b7d3f6;
   --ramp-2: #3987e5;
   --ramp-3: #0d366b;
+  --particula: #14202a;
+  --particula-halo: #fafcfc;
   --aviso: #7f4500;
   --aviso-fondo: #fbefd9;
   --aviso-borde: #e2b25e;
@@ -54,6 +56,8 @@
     --ramp-1: #183d69;
     --ramp-2: #2b6fc0;
     --ramp-3: #86b6ef;
+    --particula: #eef3f6;
+    --particula-halo: #0b1218;
     --aviso: #f3b65a;
     --aviso-fondo: #2a1f0e;
     --aviso-borde: #6b4a17;
@@ -82,6 +86,8 @@
   --ramp-1: #183d69;
   --ramp-2: #2b6fc0;
   --ramp-3: #86b6ef;
+  --particula: #eef3f6;
+  --particula-halo: #0b1218;
   --aviso: #f3b65a;
   --aviso-fondo: #2a1f0e;
   --aviso-borde: #6b4a17;
@@ -138,7 +144,6 @@ button, select, input { font: inherit; color: inherit; }
 .cartela dl div { display: flex; gap: 4px; }
 .cartela dt { text-transform: uppercase; letter-spacing: .06em; font-size: 11px; align-self: center; color: var(--tinta-3); }
 .cartela dd { margin: 0; }
-.motor-prueba { color: var(--aviso); font-weight: 600; }
 
 .transporte { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .boton {
@@ -264,7 +269,8 @@ select.boton { padding-right: 8px; }
 .lecturas dt { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--tinta-3); display: flex; align-items: center; gap: 6px; }
 .lecturas dd { margin: 2px 0 0; font-family: var(--f-num); font-variant-numeric: tabular-nums; font-size: 17px; font-weight: 500; overflow-wrap: anywhere; }
 .lecturas dd small { font-size: 12px; color: var(--tinta-2); font-weight: 400; }
-.lecturas .ancha { grid-column: span 2; }
+.lecturas .ancha { grid-column: 1 / -1; }
+.lecturas dd small.bloque { display: block; margin-top: 1px; }
 .muestra { width: 10px; height: 10px; border: 2px solid var(--papel); outline: 1px solid var(--linea); flex: none; }
 .chip { display: inline-block; font-family: var(--f-ui); font-size: 12px; font-weight: 600; padding: 1px 6px; border-radius: 2px; vertical-align: 2px; margin-left: 4px; }
 .chip.ok { background: var(--bien); color: var(--papel); }
@@ -360,19 +366,34 @@ details.grupo[open] > summary::before { content: "-"; }
 details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
 
 @media (max-width: 759px) {
-  .tablero, .col { display: contents; }
-  .app { gap: 12px; }
-  #h-planta { order: 1; }
-  #h-corte { order: 2; }
-  #avisos { order: 3; }
-  #h-lecturas { order: 4; }
-  #h-grafica { order: 5; }
-  .panel { order: 6; }
-  #h-corridas { order: 7; }
-  .cartela { padding-block: 8px; }
+  .tablero, .col, .panel, .cartela { display: contents; }
+  .cartela-datos { order: 0; padding-top: 12px; }
+  .transporte {
+    order: 1;
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    z-index: 5;
+    margin-inline: -16px;
+    padding: 8px 16px;
+    gap: 6px;
+    background: var(--papel);
+    border-block: 1px solid var(--linea);
+  }
+  .transporte .boton { min-height: 40px; padding: 0 10px; font-size: 14px; }
+  #h-planta { order: 2; }
+  #h-corte { order: 3; }
+  #p-bomba { order: 4; }
+  #avisos { order: 5; }
+  #h-lecturas { order: 6; }
+  #h-grafica { order: 7; }
+  #p-agua { order: 8; }
+  #p-capas { order: 9; }
+  #p-cisterna { order: 10; }
+  #p-supuestos { order: 11; }
+  #h-corridas { order: 12; }
   .cartela dl { display: none; }
-  .reloj { min-width: 0; }
-  .lecturas .ancha { grid-column: span 2; }
+  .reloj { min-width: 0; font-size: 12px; }
+  .reloj b { font-size: 14px; }
 }
 @media (min-width: 760px) {
   .tablero { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); align-items: start; }
@@ -408,7 +429,7 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
       </dl>
     </div>
     <div class="transporte">
-      <button id="play" class="boton" type="button" aria-pressed="true">Pausa</button>
+      <button id="play" class="boton" type="button">Pausa</button>
       <button id="reiniciar" class="boton" type="button">Reiniciar</button>
       <button id="echar" class="boton primario" type="button">Echar cloro</button>
       <label for="velocidad" class="vh">Velocidad de la simulación</label>
@@ -464,7 +485,7 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
         <dl class="lecturas">
           <div><dt>Desde la dosis</dt><dd id="l-tiempo">0.0 <small>min</small></dd></div>
           <div><dt>CoV</dt><dd id="l-cov">-</dd></div>
-          <div><dt>Rango</dt><dd id="l-rango">-</dd></div>
+          <div><dt>Rango, % meta</dt><dd id="l-rango">-</dd></div>
           <div><dt>Meta</dt><dd id="l-meta">-</dd></div>
           <div><dt><span class="muestra" style="background:var(--s1)"></span>Superficie</dt><dd id="l-s0">-</dd></div>
           <div><dt><span class="muestra" style="background:var(--s2)"></span>Llave casa</dt><dd id="l-s1">-</dd></div>
@@ -529,7 +550,7 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
   </main>
 
   <aside class="panel" aria-label="Controles">
-    <section class="grupo" aria-labelledby="g-bomba">
+    <section class="grupo" id="p-bomba" aria-labelledby="g-bomba">
       <h3 id="g-bomba">Bomba de mezcla <span class="estado" id="estado-montaje">en el mástil</span></h3>
       <div class="cuerpo">
         <div class="fila">
@@ -574,7 +595,7 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
       </div>
     </section>
 
-    <section class="grupo" aria-labelledby="g-agua">
+    <section class="grupo" id="p-agua" aria-labelledby="g-agua">
       <h3 id="g-agua">Agua y cloro</h3>
       <div class="cuerpo">
         <div class="fila">
@@ -600,7 +621,7 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
       </div>
     </section>
 
-    <section class="grupo" aria-labelledby="g-capas">
+    <section class="grupo" id="p-capas" aria-labelledby="g-capas">
       <h3 id="g-capas">Capas</h3>
       <div class="cuerpo">
         <span class="etq" id="etq-fondo">Fondo de las vistas</span>
@@ -622,10 +643,11 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
             <option value="0.2">20 cm (para teléfonos lentos)</option>
           </select>
         </label>
+        <p class="texto" id="rendimiento" aria-live="off">Midiendo el rendimiento.</p>
       </div>
     </section>
 
-    <section class="grupo" aria-labelledby="g-editar">
+    <section class="grupo" id="p-cisterna" aria-labelledby="g-editar">
       <h3 id="g-editar">Cisterna</h3>
       <div class="cuerpo">
         <label class="check"><input type="checkbox" id="editar">Editar la cisterna</label>
@@ -642,7 +664,7 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
       </div>
     </section>
 
-    <details class="grupo">
+    <details class="grupo" id="p-supuestos">
       <summary>Supuestos</summary>
       <ul class="supuestos">
         <li>Planta rectangular de 3.40 x 2.45 m y posiciones de la boca, la bomba de pozo y el flotador: supuestas, cámbialas en Editar.</li>
