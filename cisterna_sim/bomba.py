@@ -1,8 +1,11 @@
 """Punto de operación de la bomba de mezcla y tiempo de mezcla por chorro.
 
-Sumergida y descargando a la misma agua, la bomba no sube columna: la única
-carga que vence es la velocidad de salida por la boquilla, K * u^2 / (2 g).
+Sumergida y descargando a la misma agua, la bomba no sube columna. La ficha
+(Qmax a 0 m) se mide descargando libre por su propia salida, así que esa
+carga de velocidad ya está dentro de la curva: con la salida de fábrica la
+bomba da Qmax. Una reducción más chica agrega K * (u_b^2 - u_s^2) / (2 g).
 Con la curva lineal H = Hmax * (1 - Q / Qmax) queda una cuadrática en Q.
+Una manguera más ancha que la salida no agrega carga pero frena el chorro.
 
 El tiempo de mezcla es la correlación empírica del doc (EPA, Rossman y
 Grayman 1999; constante de Process Online): t = 10.2 * V^(2/3) / sqrt(M),
@@ -30,15 +33,19 @@ class PuntoOperacion:
         return self.q_m3s * 3.6e6
 
 
-def punto_operacion(q_max_lh: float, h_max_m: float, boquilla_mm: float, k_salida: float = 1.0) -> PuntoOperacion:
-    if q_max_lh <= 0 or h_max_m <= 0 or boquilla_mm <= 0 or k_salida < 0:
-        raise ValueError("q_max_lh, h_max_m y boquilla_mm deben ser > 0, k_salida >= 0")
+def punto_operacion(q_max_lh: float, h_max_m: float, boquilla_mm: float, salida_mm: float | None = None,
+                    k_salida: float = 1.0) -> PuntoOperacion:
+    """salida_mm: diámetro de la salida con la que se midió la ficha (None = igual a la boquilla)."""
+    salida_mm = boquilla_mm if salida_mm is None else salida_mm
+    if q_max_lh <= 0 or h_max_m <= 0 or boquilla_mm <= 0 or salida_mm <= 0 or k_salida < 0:
+        raise ValueError("q_max_lh, h_max_m, boquilla_mm y salida_mm deben ser > 0, k_salida >= 0")
     q_max = q_max_lh / 3.6e6
     area = math.pi * (boquilla_mm / 1000) ** 2 / 4
-    # h_max * (1 - Q/q_max) = k * Q^2 / (2 g A^2)  ->  a Q^2 + b Q - h_max = 0
-    a = k_salida / (2 * G * area**2)
+    area_s = math.pi * (salida_mm / 1000) ** 2 / 4
+    # h_max * (1 - Q/q_max) = k * Q^2 / (2 g) * (1/A^2 - 1/A_s^2)  ->  a Q^2 + b Q - h_max = 0
+    a = max(0.0, k_salida / (2 * G) * (1 / area**2 - 1 / area_s**2))
     b = h_max_m / q_max
-    q = h_max_m / b if a == 0 else (-b + math.sqrt(b * b + 4 * a * h_max_m)) / (2 * a)
+    q = q_max if a == 0 else (-b + math.sqrt(b * b + 4 * a * h_max_m)) / (2 * a)
     u = q / area
     return PuntoOperacion(q, u, q * u, h_max_m * (1 - q / q_max))
 

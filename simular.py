@@ -3,7 +3,7 @@
 Ejemplos:
   python simular.py                          # cisterna llena, dosis por la boca B, bomba 45 min
   python simular.py --nivel 0.7              # cisterna a medias
-  python simular.py --boquilla-mm 6          # con reducción en la salida
+  python simular.py --elevacion 0 --azimut 0 # chorro horizontal a lo largo
   python simular.py --dosis mastil --precalentar 600   # protocolo de la prueba 9c
 """
 
@@ -37,8 +37,12 @@ def _args():
     p.add_argument("--nivel", type=float, default=d.nivel, help="nivel del agua en m")
     p.add_argument("--caudal-lh", type=float, default=d.q_max_lh, help="caudal máximo de la bomba (ficha)")
     p.add_argument("--hmax", type=float, default=d.h_max_m, help="columna máxima de la bomba en m (ficha)")
-    p.add_argument("--boquilla-mm", type=float, default=d.boquilla_mm)
+    p.add_argument("--salida-mm", type=float, default=d.salida_mm, help="salida de fábrica de la bomba")
+    p.add_argument("--boquilla-mm", type=float, default=d.boquilla_mm, help="por donde sale el chorro")
     p.add_argument("--angulo", type=float, default=d.angulo_tubo, help="inclinación del mástil sobre la horizontal")
+    p.add_argument("--pos-bomba", type=float, nargs=3, metavar=("X", "Y", "Z"), help="bomba fuera del mástil (m)")
+    p.add_argument("--azimut", type=float, help="dirección del chorro en planta, grados desde +x hacia +y")
+    p.add_argument("--elevacion", type=float, help="grados sobre la horizontal (negativo = hacia abajo)")
     p.add_argument("--dosis", choices=LUGARES_DOSIS, default=d.lugar_dosis)
     p.add_argument("--dosis-ml", type=float, default=d.dosis_ml, help="mL de Cloralex")
     p.add_argument("--precalentar", type=float, default=d.precalentar_s, help="s de bomba andando antes de la dosis")
@@ -47,8 +51,9 @@ def _args():
     p.add_argument("--sin-gif", action="store_true", help="no generar la animación")
     a = p.parse_args()
     return a, Config(minutos=a.minutos, bomba_min=a.bomba_min, dx=a.dx, largo=a.largo, ancho=a.ancho,
-                     nivel=a.nivel, q_max_lh=a.caudal_lh, h_max_m=a.hmax, boquilla_mm=a.boquilla_mm,
-                     angulo_tubo=a.angulo, lugar_dosis=a.dosis, dosis_ml=a.dosis_ml, precalentar_s=a.precalentar,
+                     nivel=a.nivel, q_max_lh=a.caudal_lh, h_max_m=a.hmax, salida_mm=a.salida_mm,
+                     boquilla_mm=a.boquilla_mm, angulo_tubo=a.angulo,
+                     pos_bomba=tuple(a.pos_bomba) if a.pos_bomba else None, azimut=a.azimut, elevacion=a.elevacion, lugar_dosis=a.dosis, dosis_ml=a.dosis_ml, precalentar_s=a.precalentar,
                      c_nu=a.c_nu)
 
 

@@ -3,23 +3,28 @@
 Lo que sale del documento de proyecto (pág. 9, 12, 30 y 31):
   - cisterna de ~10 m3, nivel lleno ~1.20 m (flotador), la bomba de pozo
     baja el nivel hasta ~30 cm y su rejilla está a ~45 cm
-  - bomba de mezcla JT-750: 350 a 700 L/h, 0.8 a 5 m de columna, salida de
-    12 mm, amarrada al mástil a ~50 cm del fondo, chorro en la diagonal del
-    tubo hacia la esquina opuesta
+  - bomba de mezcla amarrada al mástil a ~50 cm del fondo, chorro en la
+    diagonal del tubo hacia la esquina opuesta (diseño del doc)
   - sonda ORP en la punta del tubo a ~20 cm
   - Cloralex ~50 mg/mL, dosis de 150 a 200 mL
+
+Bomba comprada: Mibee 12 V brushless, 800 L/h y 5 m según la ficha, entrada
+axial G1/2 (Ø13 interior), salida radial G1/2 con Ø8 interior, cuerpo de
+~61 x 46 x 49 mm.
 
 Supuestos (el doc no los da; cámbialos aquí o por CLI):
   - planta rectangular de 3.40 x 2.45 m (3.40 x 2.45 x 1.20 = 10.0 m3)
   - posición de la boca de la tapa, de la bomba de pozo y del llenado
   - inclinación del mástil: el dibujo no tiene lo horizontal a escala
-  - curva de la bomba lineal entre (0, Hmax) y (Qmax, 0)
+  - curva de la bomba lineal entre (0, Hmax) y (Qmax, 0), medida con su
+    propia salida de 8 mm (los 800 L/h de la ficha están sin verificar)
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Optional
 
 LUGARES_DOSIS = ("llenado", "mastil")
 
@@ -33,17 +38,24 @@ class Config:
     z_tapa: float = 1.35  # travesaño del que cuelga el mástil
     dx: float = 0.10  # tamaño objetivo de celda
 
-    # Bomba de mezcla JT-750 a 12 V.
-    q_max_lh: float = 700.0
+    # Bomba de mezcla Mibee 12 V (ficha: 800 L/h, 5 m).
+    q_max_lh: float = 800.0
     h_max_m: float = 5.0
-    boquilla_mm: float = 12.0
-    k_salida: float = 1.0  # pérdidas en la salida, en cargas de velocidad
+    salida_mm: float = 8.0  # diámetro interior de la salida de fábrica
+    boquilla_mm: float = 8.0  # diámetro por el que sale el chorro (reducción o manguera)
+    k_salida: float = 1.0  # pérdidas en una reducción, en cargas de velocidad
 
     # Mástil y puntos de interés.
     boca: tuple[float, float] = (1.20, 1.00)  # centro de la boca de la tapa (x, y)
     angulo_tubo: float = 60.0  # grados sobre la horizontal
     z_bomba: float = 0.50
     z_orp: float = 0.20
+    # Posición y dirección de la bomba. None = sobre el mástil a z_bomba, chorro a lo
+    # largo del tubo (el diseño del doc). azimut en planta, grados desde +x hacia +y;
+    # elevacion en grados, positiva hacia arriba.
+    pos_bomba: Optional[tuple[float, float, float]] = None
+    azimut: Optional[float] = None
+    elevacion: Optional[float] = None
     pozo: tuple[float, float, float] = (0.90, 1.00, 0.45)  # rejilla de la bomba de pozo
     llenado: tuple[float, float, float] = (0.25, 1.20, 1.10)  # donde cae el agua del flotador (boca B)
 
@@ -89,11 +101,21 @@ class Config:
         s = (self.z_tapa - z) / math.tan(a)
         return self.boca[0] + s * hx, self.boca[1] + s * hy, z
 
+    def plano_chorro(self) -> tuple[float, float]:
+        """Dirección en planta del chorro (si es casi vertical, la del mástil)."""
+        dx, dy, _ = self.dir_chorro()
+        n = math.hypot(dx, dy)
+        return (dx / n, dy / n) if n > 0.1 else self.rumbo()
+
+    def pos_bomba_xyz(self) -> tuple[float, float, float]:
+        return tuple(self.pos_bomba) if self.pos_bomba is not None else self.punto_tubo(self.z_bomba)
+
     def dir_chorro(self) -> tuple[float, float, float]:
-        """El chorro sigue la diagonal del tubo, hacia abajo."""
-        a = math.radians(self.angulo_tubo)
+        """Por defecto el chorro sigue la diagonal del tubo, hacia abajo."""
         hx, hy = self.rumbo()
-        return math.cos(a) * hx, math.cos(a) * hy, -math.sin(a)
+        az = math.atan2(hy, hx) if self.azimut is None else math.radians(self.azimut)
+        el = -math.radians(self.angulo_tubo) if self.elevacion is None else math.radians(self.elevacion)
+        return math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el)
 
     def punto_dosis(self) -> tuple[float, float, float]:
         if self.lugar_dosis == "mastil":
@@ -113,7 +135,8 @@ class Config:
 
     def validar(self) -> None:
         errores = []
-        for nombre in ("largo", "ancho", "nivel", "dx", "q_max_lh", "h_max_m", "boquilla_mm", "minutos", "dosis_ml"):
+        for nombre in ("largo", "ancho", "nivel", "dx", "q_max_lh", "h_max_m", "salida_mm", "boquilla_mm",
+                       "minutos", "dosis_ml"):
             if not getattr(self, nombre) > 0:
                 errores.append(f"{nombre} debe ser > 0")
         if (self.k_salida < 0 or self.precalentar_s < 0 or self.bomba_min < 0 or self.c_nu < 0
@@ -121,6 +144,8 @@ class Config:
             errores.append("k_salida, precalentar_s, bomba_min y c_nu deben ser >= 0; cloralex_mg_ml > 0")
         if not 5 <= self.angulo_tubo <= 90:
             errores.append("angulo_tubo debe estar entre 5 y 90 grados")
+        if self.elevacion is not None and not -90 <= self.elevacion <= 90:
+            errores.append("elevacion debe estar entre -90 y 90 grados")
         if self.lugar_dosis not in LUGARES_DOSIS:
             errores.append(f"lugar_dosis debe ser uno de {LUGARES_DOSIS}")
         if not 0 < self.cfl <= 0.5:
@@ -130,14 +155,15 @@ class Config:
 
         if min(self.largo, self.ancho, self.nivel) / self.dx < 4:
             errores.append("dx muy grande: se necesitan al menos 4 celdas por eje")
-        if self.nivel < self.z_bomba + 0.10:
+        zb = self.pos_bomba_xyz()[2]
+        if self.nivel < zb + 0.10:
             errores.append(
-                f"nivel {self.nivel:.2f} m deja la bomba (a {self.z_bomba:.2f} m) casi en seco; "
+                f"nivel {self.nivel:.2f} m deja la bomba (a {zb:.2f} m) casi en seco; "
                 "en la vida real el INA219 la apagaría"
             )
         if self.z_tapa <= self.nivel:
             errores.append("z_tapa debe estar arriba del nivel del agua")
-        puntos = {"bomba": self.punto_tubo(self.z_bomba), "sonda ORP": self.punto_tubo(self.z_orp),
+        puntos = {"bomba": self.pos_bomba_xyz(), "sonda ORP": self.punto_tubo(self.z_orp),
                   "pozo": self.pozo, "dosis": self.punto_dosis()}
         for nombre, (x, y, z) in puntos.items():
             if not (0 < x < self.largo and 0 < y < self.ancho and 0 < z < self.nivel):

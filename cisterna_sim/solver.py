@@ -132,7 +132,7 @@ class Cisterna:
         self.p_c = self._coords(self.c.shape, OFF_C)
 
         # Bomba: punto de operación y fuerza del chorro.
-        self.bomba = punto_operacion(cfg.q_max_lh, cfg.h_max_m, cfg.boquilla_mm, cfg.k_salida)
+        self.bomba = punto_operacion(cfg.q_max_lh, cfg.h_max_m, cfg.boquilla_mm, cfg.salida_mm, cfg.k_salida)
         self.f_u, self.f_v, self.f_w = self._fuerza_chorro()
         # Turbulencia que la malla no resuelve: nu = C * sqrt(M) (ver config.c_nu).
         self.nu_fondo = cfg.c_nu * math.sqrt(self.bomba.m_m4s2)
@@ -155,7 +155,7 @@ class Cisterna:
     def _fuerza_chorro(self):
         """Aceleración (m/s2) en cada cara; su integral en el volumen es M * dir."""
         cfg = self.cfg
-        boq = np.array(cfg.punto_tubo(cfg.z_bomba))
+        boq = np.array(cfg.pos_bomba_xyz())
         d = np.array(cfg.dir_chorro())
         centro = boq + d * self.delta  # la fuerza actúa justo delante de la boquilla
         sigma = 0.6 * self.delta
@@ -302,8 +302,8 @@ class Cisterna:
     def seccion_chorro(self, campo="c"):
         """Corte vertical por el plano del chorro: (s, z, valores[nz, ns])."""
         cfg = self.cfg
-        hx, hy = cfg.rumbo()
-        x0, y0, _ = cfg.punto_tubo(cfg.z_bomba)
+        hx, hy = cfg.plano_chorro()
+        x0, y0, _ = cfg.pos_bomba_xyz()
         # tramo de la recta (x0, y0) + s (hx, hy) dentro de la planta
         lims = []
         for p0, h, L in ((x0, hx, cfg.largo), (y0, hy, cfg.ancho)):
@@ -337,8 +337,8 @@ class Cisterna:
 
     def s_de(self, punto):
         """Coordenada s de un punto proyectado sobre el plano del chorro."""
-        hx, hy = self.cfg.rumbo()
-        x0, y0, _ = self.cfg.punto_tubo(self.cfg.z_bomba)
+        hx, hy = self.cfg.plano_chorro()
+        x0, y0, _ = self.cfg.pos_bomba_xyz()
         return (punto[0] - x0) * hx + (punto[1] - y0) * hy
 
 

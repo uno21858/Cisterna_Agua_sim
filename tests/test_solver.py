@@ -52,22 +52,42 @@ def test_chorro_empuja_en_su_direccion():
     assert vel @ d > 0
 
 
-def test_punto_de_operacion_cierra_el_balance_de_carga():
-    op = punto_operacion(700, 5, 12, k_salida=1.0)
-    h_bomba = 5 * (1 - op.q_lh / 700)
-    h_salida = op.u_ms**2 / (2 * G)
-    assert h_bomba == pytest.approx(h_salida, rel=1e-9)
-    assert 0 < op.q_lh < 700
+def test_salida_de_fabrica_da_el_caudal_de_la_ficha():
+    op = punto_operacion(800, 5, 8, salida_mm=8)
+    assert op.q_lh == pytest.approx(800)
+    assert op.u_ms == pytest.approx(800 / 3.6e6 / (math.pi * 0.004**2))
 
 
-def test_formula_da_los_45_min_del_documento():
-    op = punto_operacion(700, 5, 12)
+def test_reduccion_cierra_el_balance_de_carga():
+    op = punto_operacion(800, 5, 6, salida_mm=8, k_salida=1.0)
+    h_bomba = 5 * (1 - op.q_lh / 800)
+    u_s = op.q_m3s / (math.pi * 0.004**2)
+    h_reduccion = (op.u_ms**2 - u_s**2) / (2 * G)
+    assert h_bomba == pytest.approx(h_reduccion, rel=1e-9)
+    assert 0 < op.q_lh < 800
+
+
+def test_formula_da_los_45_min_del_documento_con_la_jt750():
+    op = punto_operacion(700, 5, 12, salida_mm=12)
     assert 40 < tiempo_mezcla_s(10.0, op.m_m4s2) / 60 < 47
 
 
-def test_boquilla_mas_chica_mezcla_mas_rapido_hasta_un_punto():
-    t = {b: tiempo_mezcla_s(10.0, punto_operacion(700, 5, b).m_m4s2) for b in (3, 6, 12)}
-    assert t[6] < t[12] and t[6] < t[3]
+def test_formula_con_la_mibee():
+    op = punto_operacion(800, 5, 8, salida_mm=8)
+    assert 23 < tiempo_mezcla_s(10.0, op.m_m4s2) / 60 < 27
+
+
+def test_reduccion_casi_no_ayuda_y_manguera_ancha_empeora():
+    t = {b: tiempo_mezcla_s(10.0, punto_operacion(800, 5, b, salida_mm=8).m_m4s2) for b in (3, 6, 8, 12)}
+    assert t[8] < t[3] and t[8] < t[12]
+    assert abs(t[6] - t[8]) / t[8] < 0.05
+
+
+def test_chorro_configurable():
+    cfg = Config(azimut=90.0, elevacion=0.0, pos_bomba=(1.0, 1.0, 0.6))
+    assert np.allclose(cfg.dir_chorro(), (0.0, 1.0, 0.0), atol=1e-12)
+    sim = Cisterna(Config(dx=0.2, azimut=90.0, elevacion=0.0, pos_bomba=(1.0, 1.0, 0.6)))
+    assert sim.f_v.sum() > 0 and abs(sim.f_u.sum()) < 1e-12 and abs(sim.f_w.sum()) < 1e-12
 
 
 @pytest.mark.parametrize("kw", [
@@ -79,6 +99,8 @@ def test_boquilla_mas_chica_mezcla_mas_rapido_hasta_un_punto():
     {"cfl": 0.9},
     {"c_nu": -0.01},
     {"dosis_ml": 0},
+    {"elevacion": 120},
+    {"pos_bomba": (1.0, 1.0, 1.15)},
 ])
 def test_configuracion_invalida(kw):
     with pytest.raises(ValueError):

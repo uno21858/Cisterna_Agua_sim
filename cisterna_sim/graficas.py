@@ -86,7 +86,7 @@ def graficar_flujo(sim, ruta):
     ax1.streamplot(s, z, ua, wa, color=TINTA_2, density=1.4, linewidth=0.7, arrowsize=0.8)
     arriba, punta = cfg.punto_tubo(cfg.nivel), cfg.punto_tubo(cfg.z_orp)
     ax1.plot([sim.s_de(arriba), sim.s_de(punta)], [arriba[2], punta[2]], color=TINTA, lw=3, label="mástil")
-    _marca(ax1, 0, cfg.z_bomba, "bomba de mezcla", SERIES[1])
+    _marca(ax1, 0, cfg.pos_bomba_xyz()[2], "bomba de mezcla", SERIES[1])
     _marca(ax1, sim.s_de(punta), cfg.z_orp, "sonda ORP", SERIES[2])
     ax1.set_xlim(s[0], s[-1])
     ax1.set_ylim(0, cfg.nivel)
@@ -105,7 +105,7 @@ def graficar_flujo(sim, ruta):
     im2 = ax2.pcolormesh(x, y, spd * 100, cmap=AZUL, vmin=0, vmax=max(np.percentile(spd, 99), 1e-4) * 100,
                          shading="auto")
     ax2.streamplot(x, y, U, V, color=TINTA_2, density=1.2, linewidth=0.7, arrowsize=0.8)
-    bx, by, _ = cfg.punto_tubo(cfg.z_bomba)
+    bx, by, bz = cfg.pos_bomba_xyz()
     d = cfg.dir_chorro()
     ax2.annotate("", (bx + 0.5 * d[0] / np.hypot(d[0], d[1]), by + 0.5 * d[1] / np.hypot(d[0], d[1])), (bx, by),
                  arrowprops=dict(arrowstyle="-|>", color=SERIES[1], lw=2))
@@ -143,8 +143,8 @@ def animar(sim, cuadros, ruta, fps=6):
     ax2.set_xlabel("largo (m)")
     ax2.set_ylabel("ancho (m)")
     ax2.set_title("Planta, promedio de toda la columna de agua", loc="left")
-    _marca(ax1, 0, cfg.z_bomba, "bomba", SERIES[1])
-    bx, by, _ = cfg.punto_tubo(cfg.z_bomba)
+    _marca(ax1, 0, cfg.pos_bomba_xyz()[2], "bomba", SERIES[1])
+    bx, by, bz = cfg.pos_bomba_xyz()
     _marca(ax2, bx, by, "bomba", SERIES[1])
     _marca(ax2, cfg.pozo[0], cfg.pozo[1], "pozo", TINTA_2)
     fig.colorbar(im2, ax=[ax1, ax2], label=f"cloro (mg/L); mezcla perfecta = {sim.c_final:.2f}", shrink=0.9,
