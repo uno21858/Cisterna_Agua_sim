@@ -1052,7 +1052,7 @@ function overlayPlanta(v) {
   const nh = Math.hypot(d[0], d[1]);
   const az = Math.atan2(d[1], d[0]);
   const deFrente = nh < DE_FRENTE;
-  const lf = Math.max(0.5 * nh, 30 / esc);
+  const lf = Math.max(0.5 * nh, 22 / esc);
   const tip = [pb[0] + Math.cos(az) * lf, pb[1] + Math.sin(az) * lf];
   if (deFrente) trazo(c, [[X(pb[0]), Y(pb[1])], [X(tip[0]), Y(tip[1])]], T.acento, 1.2, [2, 3]);
   else flecha(c, X(pb[0]), Y(pb[1]), X(tip[0]), Y(tip[1]), T.acento, 2.5, 10);
