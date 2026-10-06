@@ -25,7 +25,7 @@ const RESUMEN = path.join(DIR, "resumen.json");
 const MUESTRA_S = 10;
 const SERIE_S = 60;
 const CORTO_S = 600;
-const MAX_HILOS = 3;
+const MAX_HILOS = 4;
 const DECAY_CHORRO = 6.2; // u_eje / u0 = 6.2 d / x, chorro redondo turbulento libre (Rajaratnam)
 const ABRE_CHORRO = 0.2; // radio exterior del chorro / distancia (medio ángulo ~11 grados, supuesto)
 const DIST_REJILLA = 0.5;
