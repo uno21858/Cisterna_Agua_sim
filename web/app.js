@@ -645,15 +645,22 @@ function limpiaOverlay(v) {
 // ---------- rótulos sin choques ----------
 // Cada nombre prueba lugares alrededor de su pieza, en anillos cada vez más lejanos, y se queda
 // con el que menos tapa a otros rótulos, a las piezas dibujadas y a las cotas. Desde el segundo
-// anillo lleva línea guía.
+// anillo lleva línea guía. Las cotas que miden piezas (alturas, distancias a los muros) también
+// se acomodan: prueban varias posiciones de su línea y de su número, y se colocan primero porque
+// tienen menos lugares posibles.
 
 const RUMBOS = { e: [1, 0], o: [-1, 0], n: [0, -1], s: [0, 1], ne: [1, -1], no: [-1, -1], se: [1, 1], so: [-1, 1] };
 const ORDEN_RUMBOS = ["e", "o", "ne", "no", "se", "so", "n", "s"];
+const TAM_COTA = 11;
+
+const inter = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
 
 function creaRotulos(c, w, h, tam) {
   const obst = [];
   const pedidos = [];
-  const inter = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+  const puestos = [];
+  const fuera = (r) => r[0] < 1 || r[1] < 1 || r[2] > w - 1 || r[3] > h - 1;
+  const holgado = (r) => [r[0] - 2, r[1] - 2, r[2] + 2, r[3] + 2];
   const R = {
     tapa(x0, y0, x1, y1, peso = 3) {
       obst.push([Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), peso]);
@@ -668,68 +675,160 @@ function creaRotulos(c, w, h, tam) {
         obst.push([x - g, y - g, x + g, y + g, peso]);
       }
     },
+    // Nombre de una pieza: se busca lugar alrededor de (x, y).
     pide(txt, x, y, o = {}) {
-      pedidos.push({ txt, x, y, r: o.r ?? 6, color: o.color ?? T.tinta2, peso: o.peso ?? 500, prio: o.prio ?? 0, pref: o.pref ?? ORDEN_RUMBOS });
+      pedidos.push({ tipo: "nombre", txt, x, y, r: o.r ?? 6, color: o.color ?? T.tinta2, peso: o.peso ?? 500, prio: o.prio ?? 0, pref: o.pref ?? ORDEN_RUMBOS });
+    },
+    // Cota móvil: cands = [{ linea: [x1, y1, x2, y2] | null, ext: [[xa, ya, xb, yb], ...], tx, ty, rot }]
+    cota(txt, cands, o = {}) {
+      pedidos.push({ tipo: "cota", txt, cands, color: o.color ?? T.tinta2, prio: 100 + (o.prio ?? 0) });
     },
     resuelve() {
-      const puestos = [];
       pedidos.sort((a, b) => b.prio - a.prio);
-      // Las piezas de cada rótulo estorban a los demás.
-      for (const p of pedidos) obst.push([p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r, 3, p]);
-      const padX = 3, th = tam + 5;
-      for (const p of pedidos) {
-        const tw = anchoTexto(c, p.txt, tam, p.peso) + 2 * padX;
-        let mejor = null;
-        const anillos = [p.r + 3, p.r + 15, p.r + 30, p.r + 48];
-        anillos.forEach((d, ia) => {
-          const rumbos = [...p.pref, ...ORDEN_RUMBOS.filter((q) => !p.pref.includes(q))];
-          rumbos.forEach((nombre, ir) => {
-            const [dx, dy] = RUMBOS[nombre];
-            const k = dx && dy ? 0.72 : 1;
-            const ax = p.x + dx * d * k, ay = p.y + dy * d * k;
-            const x0 = dx > 0 ? ax : dx < 0 ? ax - tw : ax - tw / 2;
-            const y0 = dy > 0 ? ay : dy < 0 ? ay - th : ay - th / 2;
-            const r = [x0, y0, x0 + tw, y0 + th];
-            let costo = ia * 140 + ir * 6;
-            if (x0 < 1 || y0 < 1 || r[2] > w - 1 || r[3] > h - 1) costo += 1e6;
-            for (const q of puestos) costo += 40 * inter(r, q);
-            for (const o of obst) if (o[5] !== p) costo += o[4] * inter(r, o);
-            if (!mejor || costo < mejor.costo) mejor = { costo, r, ia, dx, dy };
-          });
-        });
-        const { r, ia } = mejor;
-        puestos.push(r);
-        let guia = null;
-        if (ia >= 1) {
-          const gx = clamp(p.x, r[0], r[2]), gy = clamp(p.y, r[1], r[3]);
-          const dd = Math.hypot(gx - p.x, gy - p.y) || 1;
-          guia = [p.x + ((gx - p.x) / dd) * p.r, p.y + ((gy - p.y) / dd) * p.r, gx, gy];
-          R.linea(...guia, 1.5, 1);
-        }
-        p.lugar = { r, guia };
-      }
-      c.save();
-      c.textBaseline = "middle";
-      for (const p of pedidos) {
-        const { r, guia } = p.lugar;
-        if (guia) trazo(c, [[guia[0], guia[1]], [guia[2], guia[3]]], p.color, 1);
-        c.globalAlpha = 0.88;
-        c.fillStyle = T.papel;
-        c.beginPath();
-        c.roundRect(r[0], r[1], r[2] - r[0], r[3] - r[1], 2);
-        c.fill();
-        c.globalAlpha = 1;
-        c.font = fuente(tam, p.peso);
-        c.fillStyle = p.color;
-        c.textAlign = "left";
-        c.fillText(p.txt, r[0] + padX, (r[1] + r[3]) / 2 + 0.5);
-      }
-      c.restore();
+      // Las piezas de cada nombre estorban a los demás rótulos.
+      for (const p of pedidos) if (p.tipo === "nombre") obst.push([p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r, 3, p]);
+      for (const p of pedidos) (p.tipo === "cota" ? colocaCota : colocaNombre)(p);
+      dibuja();
       return pedidos;
     },
+    get puestos() { return puestos; },
+    get obst() { return obst; },
   };
+
+  function colocaCota(p) {
+    const tw = anchoTexto(c, p.txt, TAM_COTA, 500, true);
+    const a = (TAM_COTA + 4) / 2, b = tw / 2 + 2;
+    let mejor = null;
+    p.cands.forEach((q, i) => {
+      const r = q.rot ? [q.tx - a, q.ty - b, q.tx + a, q.ty + b] : [q.tx - b, q.ty - a, q.tx + b, q.ty + a];
+      let costo = i * 8;
+      if (fuera(r)) costo += 1e6;
+      const rh = holgado(r);
+      for (const u of puestos) costo += 40 * inter(rh, u);
+      for (const o of obst) costo += (o[4] >= 3 ? 5 * o[4] : o[4]) * inter(r, o);
+      if (q.linea) {
+        const [x1, y1, x2, y2] = q.linea;
+        const lr = [Math.min(x1, x2) - 1.5, Math.min(y1, y2) - 1.5, Math.max(x1, x2) + 1.5, Math.max(y1, y2) + 1.5];
+        for (const u of puestos) costo += 8 * inter(lr, u);
+        for (const o of obst) costo += 0.6 * o[4] * inter(lr, o);
+      }
+      if (!mejor || costo < mejor.costo) mejor = { costo, r, q };
+    });
+    const { r, q } = mejor;
+    r.p = p;
+    puestos.push(r);
+    if (q.linea) R.linea(...q.linea, 2, 2);
+    for (const e of q.ext || []) R.linea(...e, 1.5, 0.5);
+    p.lugar = { r, q };
+  }
+
+  function colocaNombre(p) {
+    const padX = 3, th = tam + 5;
+    const tw = anchoTexto(c, p.txt, tam, p.peso) + 2 * padX;
+    let mejor = null;
+    const anillos = [p.r + 3, p.r + 15, p.r + 30, p.r + 48, p.r + 70];
+    const rumbos = [...p.pref, ...ORDEN_RUMBOS.filter((q) => !p.pref.includes(q))];
+    anillos.forEach((d, ia) => {
+      rumbos.forEach((nombre, ir) => {
+        const [dx, dy] = RUMBOS[nombre];
+        const k = dx && dy ? 0.72 : 1;
+        const ax = p.x + dx * d * k, ay = p.y + dy * d * k;
+        const x0 = dx > 0 ? ax : dx < 0 ? ax - tw : ax - tw / 2;
+        const y0 = dy > 0 ? ay : dy < 0 ? ay - th : ay - th / 2;
+        const r = [x0, y0, x0 + tw, y0 + th];
+        let costo = ia * 140 + ir * 6;
+        if (fuera(r)) costo += 1e6;
+        const rh = holgado(r);
+        for (const u of puestos) costo += 40 * inter(rh, u);
+        // Tapar una pieza (peso 3 o más) cuesta más que alejarse un anillo.
+        for (const o of obst) if (o[5] !== p) costo += (o[4] >= 3 ? 5 * o[4] : o[4]) * inter(r, o);
+        if (ia >= 1) {
+          // La línea guía tampoco debe cruzar otros rótulos.
+          const gx = clamp(p.x, r[0], r[2]), gy = clamp(p.y, r[1], r[3]);
+          const n = Math.max(1, Math.ceil(Math.hypot(gx - p.x, gy - p.y) / 4));
+          for (let s = 1; s < n; s++) {
+            const x = p.x + ((gx - p.x) * s) / n, y = p.y + ((gy - p.y) * s) / n;
+            for (const u of puestos) if (x > u[0] && x < u[2] && y > u[1] && y < u[3]) costo += 60;
+          }
+        }
+        if (!mejor || costo < mejor.costo) mejor = { costo, r, ia };
+      });
+    });
+    const { r, ia } = mejor;
+    r.p = p;
+    puestos.push(r);
+    let guia = null;
+    if (ia >= 1) {
+      const gx = clamp(p.x, r[0], r[2]), gy = clamp(p.y, r[1], r[3]);
+      const dd = Math.hypot(gx - p.x, gy - p.y) || 1;
+      guia = [p.x + ((gx - p.x) / dd) * p.r, p.y + ((gy - p.y) / dd) * p.r, gx, gy];
+      R.linea(...guia, 1.5, 1);
+    }
+    p.lugar = { r, guia };
+  }
+
+  function dibuja() {
+    // Primero las líneas (guías y cotas), luego todos los textos encima.
+    for (const p of pedidos) {
+      if (p.tipo === "nombre") {
+        const { guia } = p.lugar;
+        if (guia) trazo(c, [[guia[0], guia[1]], [guia[2], guia[3]]], p.color, 1);
+        continue;
+      }
+      const { q } = p.lugar;
+      for (const e of q.ext || []) trazo(c, [[e[0], e[1]], [e[2], e[3]]], p.color, 0.8);
+      if (q.linea) {
+        const [x1, y1, x2, y2] = q.linea;
+        const vert = Math.abs(x2 - x1) < Math.abs(y2 - y1);
+        if (vert) trazo(c, [[x1, Math.min(y1, y2) - 4], [x1, Math.max(y1, y2) + 4]], p.color, 1);
+        else trazo(c, [[Math.min(x1, x2) - 4, y1], [Math.max(x1, x2) + 4, y1]], p.color, 1);
+        for (const [x, y] of [[x1, y1], [x2, y2]]) trazo(c, [[x - 4, y + 4], [x + 4, y - 4]], p.color, 1.2);
+      }
+    }
+    c.save();
+    c.textBaseline = "middle";
+    for (const p of pedidos) {
+      if (p.tipo === "cota") {
+        const { q } = p.lugar;
+        texto(c, p.txt, q.tx, q.ty, { color: p.color, tam: TAM_COTA, mono: true, alinea: "center", rot: q.rot || 0 });
+        continue;
+      }
+      const { r } = p.lugar;
+      c.globalAlpha = 0.88;
+      c.fillStyle = T.papel;
+      c.beginPath();
+      c.roundRect(r[0], r[1], r[2] - r[0], r[3] - r[1], 2);
+      c.fill();
+      c.globalAlpha = 1;
+      c.font = fuente(tam, p.peso);
+      c.fillStyle = p.color;
+      c.textAlign = "left";
+      c.fillText(p.txt, r[0] + 3, (r[1] + r[3]) / 2 + 0.5);
+    }
+    c.restore();
+  }
+
   return R;
 }
+
+// Cota vertical móvil (alturas sobre el fondo en el corte): prueba la línea a varios lados y
+// distancias de la pieza (xs = [[x, lado], ...]) y el número a varias alturas sobre ella.
+function cotaVMovil(R, txt, yTop, yBot, xRef, xs, color, prio = 0) {
+  const fr = yBot - yTop > 60 ? [0.5, 0.3, 0.7] : [0.5];
+  const cands = [];
+  for (const [x, lado, xr = xRef] of xs) {
+    for (const f of fr) {
+      cands.push({
+        linea: [x, yTop, x, yBot], tx: x + 8 * lado, ty: yTop + (yBot - yTop) * f, rot: -Math.PI / 2,
+        ext: [[xr, yTop, x + 4 * lado, yTop]],
+      });
+    }
+  }
+  R.cota(txt, cands, { color, prio });
+}
+
+// Registro de lo que quedó en cada vista, para revisar choques desde las pruebas.
+const rotulosVista = {};
 
 const tamRotulo = (v) => (v.w < 520 ? 11 : 12);
 
@@ -870,17 +969,24 @@ function overlayPlanta(v) {
     // Posición de la bomba desde las dos paredes más cercanas
     const xw = pb[0] < L / 2 ? 0 : L, yw = pb[1] < W / 2 ? 0 : W;
     const dxm = Math.abs(pb[0] - xw), dym = Math.abs(pb[1] - yw);
+    // El número se acomoda a lo largo de su línea punteada, de un lado o del otro.
+    const fr = [0.5, 0.35, 0.65, 0.2, 0.8];
     if (dxm > 0.08) {
-      trazo(c, [[X(xw), Y(pb[1])], [X(pb[0]) - Math.sign(pb[0] - xw) * 14, Y(pb[1])]], T.acento, 0.9, [1, 3]);
-      const s = String(cm(dxm)), tx = X((xw + pb[0]) / 2), tw = anchoTexto(c, s, 11, 500, true);
-      texto(c, s, tx, Y(pb[1]) + 10, { tam: 11, mono: true, color: T.acento, alinea: "center" });
-      R.tapa(tx - tw / 2 - 2, Y(pb[1]) + 3, tx + tw / 2 + 2, Y(pb[1]) + 17, 4);
+      const xa = X(xw), xb = X(pb[0]) - Math.sign(pb[0] - xw) * 14, yl = Y(pb[1]);
+      trazo(c, [[xa, yl], [xb, yl]], T.acento, 0.9, [1, 3]);
+      R.linea(xa, yl, xb, yl, 2, 0.5);
+      const cands = [];
+      for (const f of fr) for (const dy of [10, -10]) cands.push({ tx: xa + (xb - xa) * f, ty: yl + dy });
+      R.cota(String(cm(dxm)), cands, { color: T.acento, prio: 2 });
     }
     if (dym > 0.08) {
-      trazo(c, [[X(pb[0]), Y(yw)], [X(pb[0]), Y(pb[1]) + Math.sign(pb[1] - yw) * 14]], T.acento, 0.9, [1, 3]);
-      const s = String(cm(dym)), ty = Y((yw + pb[1]) / 2), tw = anchoTexto(c, s, 11, 500, true);
-      texto(c, s, X(pb[0]) + 6, ty, { tam: 11, mono: true, color: T.acento });
-      R.tapa(X(pb[0]) + 4, ty - 7, X(pb[0]) + 8 + tw, ty + 7, 4);
+      const ya = Y(yw), yb = Y(pb[1]) + Math.sign(pb[1] - yw) * 14, xl = X(pb[0]);
+      trazo(c, [[xl, ya], [xl, yb]], T.acento, 0.9, [1, 3]);
+      R.linea(xl, ya, xl, yb, 2, 0.5);
+      const s = String(cm(dym)), tw = anchoTexto(c, s, TAM_COTA, 500, true);
+      const cands = [];
+      for (const f of fr) for (const dx of [6 + tw / 2, -6 - tw / 2]) cands.push({ tx: xl + dx, ty: ya + (yb - ya) * f });
+      R.cota(s, cands, { color: T.acento, prio: 2 });
     }
   }
   barraEscala(c, R, X(-MURO), Y(-MURO) + 30, esc);
@@ -896,8 +1002,9 @@ function overlayPlanta(v) {
     R.pide(etq, X(ray.fin[0]), Y(ray.fin[1]), { r: 7, color: colorRayo, prio: 5 });
     R.pide("boca", X(bx - BOCA / 2), Y(by + BOCA / 2), { r: 2, prio: 4, pref: ["no", "n", "o", "ne"] });
     R.pide(`mástil ${cfg.angulo_tubo}°`, X((bx + punta[0]) / 2), Y((by + punta[1]) / 2), { r: 4, prio: 3 });
-    R.resuelve();
   }
+  R.resuelve();
+  rotulosVista.planta = R;
 }
 
 // ---------- corte ----------
@@ -1015,6 +1122,7 @@ function overlayCorte(v) {
   trazo(c, [[X(hp), Y(pb[2])], [X(hf), Y(ray.fin[2])]], colorRayo, 1.2, [2, 4]);
   R.linea(X(hp), Y(pb[2]), X(hf), Y(ray.fin[2]), 2, 0.3);
   tache(c, X(hf), Y(ray.fin[2]), colorRayo);
+  R.punto(X(hf), Y(ray.fin[2]), 6, 3);
   const nd = Math.hypot(dh, d[2]) || 1;
   const lf = 0.45;
   const tip = [hp + (dh / nd) * lf, pb[2] + (d[2] / nd) * lf];
@@ -1038,14 +1146,14 @@ function overlayCorte(v) {
     const xr = X(h1 + MURO);
     cotaV(c, R, xr + 14, Y(N), Y(0), String(cm(N)), T.agua, X(h1) + 2);
     cotaV(c, R, xr + 34, Y(zt), Y(0), String(cm(zt)), T.tinta2, xr + 2);
-    cotaV(c, R, X(pp) - r - 12, Y(zr), Y(0), String(cm(zr)), T.tinta2, X(pp) - r, -1);
-    // Altura de la bomba y de la sonda ORP: del lado contrario al chorro y, si quedan juntas, una por lado.
+    // Alturas de la rejilla, la bomba y la sonda ORP: cada una prueba su línea a los dos lados de
+    // su pieza y a varias distancias; primero del lado contrario al chorro.
     const ladoB = dh >= 0 ? -1 : 1;
-    const xb = X(hp) + ladoB * 18;
-    let xo = X(ht) + (ht >= hp ? 14 : -14);
-    if (Math.abs(xo - xb) < 22) xo = xb + ladoB * 24;
-    cotaV(c, R, xb, Y(pb[2]), Y(0), String(cm(pb[2])), T.acento, X(hp), ladoB);
-    cotaV(c, R, xo, Y(cfg.z_orp), Y(0), String(cm(cfg.z_orp)), T.s[2], X(ht), xo >= X(ht) ? 1 : -1);
+    const xsDe = (x0, ds, primero, xRef0 = x0, hueco = 0) => ds.flatMap((d) => [primero, -primero]
+      .map((s) => [x0 + s * (d + hueco), s, xRef0 + s * hueco]));
+    cotaVMovil(R, String(cm(pb[2])), Y(pb[2]), Y(0), X(hp), xsDe(X(hp), [18, 32, 46, 60], ladoB), T.acento, 3);
+    cotaVMovil(R, String(cm(cfg.z_orp)), Y(cfg.z_orp), Y(0), X(ht), xsDe(X(ht), [14, 28, 42, 56], ht >= hp ? 1 : -1), T.s[2], 2);
+    cotaVMovil(R, String(cm(zr)), Y(zr), Y(0), X(pp), xsDe(X(pp), [12, 26, 40], -1, X(pp), r), T.tinta2, 1);
     const txtLargo = est.corte === "largo" ? String(cm(h1 - h0)) : `${cm(h1 - h0)} por el chorro`;
     cotaH(c, R, X(h0), X(h1), Y(-MURO) + 18, txtLargo, T.tinta2, Y(-MURO) + 2);
   }
@@ -1063,10 +1171,11 @@ function overlayCorte(v) {
     if (!juntos) R.pide("dosis", dosisXY[0], dosisXY[1] - 2, { r: 8, prio: 6 });
     R.pide("boca", X(hb), Y(zt + LOSA), { r: 3, prio: 6, pref: ["n", "ne", "no"] });
     R.pide("sonda ORP", X(ht), Y(cfg.z_orp), { r: 7, prio: 6, pref: ["e", "o", "se", "ne"] });
-    R.pide(`nivel ${cm(N)}`, X(hn), Y(N) - 6, { r: 7, color: T.agua, prio: 5, pref: ["e", "ne", "o", "no"] });
+    R.pide(est.capas.cotas ? "nivel" : `nivel ${cm(N)}`, X(hn), Y(N) - 6, { r: 7, color: T.agua, prio: 5, pref: ["o", "no", "e", "ne"] });
     if (ray.donde === "fondo") R.pide("pega en el fondo", X(hf), Y(ray.fin[2]), { r: 7, color: colorRayo, prio: 5, pref: ["n", "ne", "no"] });
-    R.resuelve();
   }
+  R.resuelve();
+  rotulosVista.corte = R;
 }
 
 // ---------- fondo: cloro o rapidez ----------
@@ -2089,7 +2198,34 @@ pintaMotor();
 arranca();
 requestAnimationFrame(cuadro);
 
+// Revisión de rótulos para las pruebas: pares de rótulos encimados y rótulos sobre piezas.
+function choques() {
+  const out = {};
+  for (const [nombre, R] of Object.entries(rotulosVista)) {
+    const v = vistas[nombre];
+    const lista = [];
+    const ps = R.puestos;
+    for (let i = 0; i < ps.length; i++) {
+      const a = ps[i];
+      if (a[0] < 0 || a[1] < 0 || a[2] > v.w || a[3] > v.h) lista.push(`${a.p.txt} se sale`);
+      for (let j = i + 1; j < ps.length; j++) {
+        const ar = inter(a, ps[j]);
+        if (ar > 2) lista.push(`${a.p.txt} / ${ps[j].p.txt}: ${Math.round(ar)} px2`);
+      }
+      let sobre = 0;
+      for (const o of R.obst) if (o[4] >= 3 && o[5] !== a.p) sobre += inter(a, o);
+      if (sobre > 6) lista.push(`${a.p.txt} sobre piezas: ${Math.round(sobre)} px2`);
+    }
+    out[nombre] = lista;
+  }
+  return out;
+}
+
 window.visor = {
-  get sim() { return sim; }, cfg, est, perf,
+  get sim() { return sim; }, cfg, est, perf, choques,
   get vSim() { return perf.vSim; }, get costoPaso() { return perf.motorPasoMs; },
+  aplica(cambios) {
+    Object.assign(cfg, cambios);
+    cambioCfg();
+  },
 };
