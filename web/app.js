@@ -2242,6 +2242,8 @@ function choques() {
 
 window.visor = {
   get sim() { return sim; }, cfg, est, perf, choques,
+  manijas: (nombre) => vistas[nombre].manijas.map(({ id, x, y }) => ({ id, x, y })),
+  get corridas() { return corridas.length; },
   get vSim() { return perf.vSim; }, get costoPaso() { return perf.motorPasoMs; },
   aplica(cambios) {
     Object.assign(cfg, cambios);

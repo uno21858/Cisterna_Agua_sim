@@ -29,6 +29,7 @@ export function creaMotor(manda, { presupuestoMs = 14, enHiloPrincipal = false }
   let vEsc = 0.05;
   let tEsc = 0;
   let agendado = false;
+  let fresco = false;
 
   const canal = enHiloPrincipal ? null : new MessageChannel();
   if (canal) canal.port1.onmessage = bucle;
@@ -90,7 +91,9 @@ export function creaMotor(manda, { presupuestoMs = 14, enHiloPrincipal = false }
     }
     if (ahora - ref.real > 400) {
       const v1 = (sim.t - ref.t) / ((ahora - ref.real) / 1000);
-      vSim = corriendo ? (vSim ? 0.6 * vSim + 0.4 * v1 : v1) : 0;
+      // Tras cambiar la velocidad pedida, la primera medida reemplaza al promedio.
+      vSim = corriendo ? (vSim && !fresco ? 0.6 * vSim + 0.4 * v1 : v1) : 0;
+      fresco = false;
       ref = { t: sim.t, real: ahora };
     }
     const msj = {
@@ -182,6 +185,8 @@ export function creaMotor(manda, { presupuestoMs = 14, enHiloPrincipal = false }
         if (m.velocidad != null && m.velocidad !== velocidad) {
           velocidad = m.velocidad;
           deuda = 0;
+          fresco = true;
+          ref = { t: sim ? sim.t : 0, real: performance.now() };
         }
         if (m.corriendo != null) {
           corriendo = m.corriendo;
