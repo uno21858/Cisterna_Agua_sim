@@ -38,13 +38,15 @@ const ELEVACIONES = [-15, 0, 15];
 // Referencia tangencial: bomba a 30 cm de la pared del lado opuesto al pozo, chorro horizontal
 // tangente (giro antihorario visto desde arriba). La distancia a la pared es supuesta.
 const TANGENCIAL = { pos: [2.96, 1.63], az: 90 };
+// Elegida con el tamizado: a 50 cm, horizontal, hacia el lado contrario al flotador visto desde el tubo.
+const RECOMENDADA = { lado: { az: -45, el: 0 }, pared: { az: 0, el: 0 } };
 
 const rad = (g) => (g * Math.PI) / 180;
 const r3 = (x) => (x == null || !Number.isFinite(x) ? x : Math.round(x * 1000) / 1000);
 
 export function caso(p) {
-  const c = { z: 0.5, el: 0, consumo: 0, bomba_min: 45, minutos: 90, dx: 0.10, daz: 0, ...p };
-  const cfg = { ...BASE, dx: c.dx, llenado: LLENADOS[c.llenado], lugar_dosis: "llenado", consumo_lpm: c.consumo };
+  const c = { z: 0.5, el: 0, consumo: 0, bomba_min: 45, minutos: 90, dx: 0.10, daz: 0, dosis: "llenado", ...p };
+  const cfg = { ...BASE, dx: c.dx, llenado: LLENADOS[c.llenado], lugar_dosis: c.dosis, consumo_lpm: c.consumo };
   if (c.tipo === "propuesta") {
     // la bomba va pegada al tubo, ~6 cm del eje, del lado hacia donde escupe
     cfg.pos_bomba = [MASTIL[0] + 0.06 * Math.cos(rad(c.az)), MASTIL[1] + 0.06 * Math.sin(rad(c.az)), c.z];
@@ -61,7 +63,7 @@ export function caso(p) {
   if (c.sin_bomba) c.bomba_min = 0;
   c.id = [c.tipo, c.llenado, `z${Math.round(c.z * 100)}`, c.tipo === "propuesta" ? `a${c.az}_e${c.el}` : "",
     c.consumo ? `q${c.consumo}` : "", c.sin_bomba ? "sinbomba" : "", c.dx !== 0.10 ? `dx${Math.round(c.dx * 100)}` : "",
-    c.daz ? `d${c.daz > 0 ? "+" : ""}${c.daz}` : ""].filter(Boolean).join("_");
+    c.daz ? `d${c.daz > 0 ? "+" : ""}${c.daz}` : "", c.dosis !== "llenado" ? `dosis_${c.dosis}` : ""].filter(Boolean).join("_");
   c.cfg = cfg;
   validar(cfg);
   return c;
@@ -137,7 +139,7 @@ export function simula(c) {
   const i45 = t.findIndex((x) => x >= 45 - 1e-9);
   return {
     id: c.id, tipo: c.tipo, llenado: c.llenado, z: c.z, az: c.az ?? null, el: c.el, consumo: c.consumo,
-    sin_bomba: !!c.sin_bomba, dx: c.dx, daz: c.daz,
+    sin_bomba: !!c.sin_bomba, dx: c.dx, daz: c.daz, dosis: c.dosis,
     pos_bomba: sim.geo.pos_bomba.map(r3),
     t95: desde(t, cov.map((v) => v > 0.05)),
     t10: desde(t, cmin.map((v, q) => v < 0.9 || cmax[q] > 1.1)),
@@ -154,7 +156,8 @@ export function simula(c) {
 
 // ---- plan por etapas (cada etapa elige con lo ya corrido) ----
 
-const nominal = (r) => (r.dx ?? 0.10) === 0.10 && !r.daz;
+const enMalla = (r) => (r.dx ?? 0.10) === 0.10 && !r.daz; // celdas de 10 cm y puntería exacta
+const nominal = (r) => enMalla(r) && (r.dosis ?? "llenado") === "llenado";
 // Se elige por la mezcla. Aquí el cloro cae a 25 cm del pozo y el pico en la rejilla sale de 3 a 5 veces la
 // meta casi con cualquier chorro; lo que cuenta es cuánto se va a la casa, y eso lo mide la etapa de consumo.
 const costo = (r) => r.t95 ?? 90 + 100 * (r.cov45 ?? 1);
@@ -187,7 +190,7 @@ function plan(hechos) {
   etapas.push(["tamizado (8 direcciones x 3 inclinaciones a 50 cm, y las referencias)", tamizado]);
   const listo = tamizado.every((c) => hechos.has(c.id));
   if (!listo) return etapas;
-  const alturas = [], consumo = [], firmeza = [];
+  const alturas = [], consumo = [], firmeza = [], dosis = [];
   for (const llenado of Object.keys(LLENADOS)) {
     const top = mejores(hechos, llenado, 2);
     for (const r of top) for (const z of [0.35, 0.65, 0.8]) alturas.push(caso({ tipo: "propuesta", llenado, az: r.az, el: r.el, z }));
@@ -204,10 +207,15 @@ function plan(hechos) {
     for (const el of [...new Set([m.el, 0])]) {
       for (const v of [{ dx: 0.09 }, { dx: 0.11 }, { daz: -5 }, { daz: 5 }]) firmeza.push(caso({ tipo: "propuesta", llenado, az: m.az, el, ...v }));
     }
+    // la recomendada con el cloro echado por el flotador o junto al tubo, con y sin la casa usando agua
+    const rec = { tipo: "propuesta", llenado, ...RECOMENDADA[llenado] };
+    dosis.push(caso({ ...rec, consumo: 15 }), caso({ ...rec, dosis: "mastil" }), caso({ ...rec, dosis: "mastil", consumo: 15 }),
+      caso({ ...rec, dosis: "mastil", consumo: 15, sin_bomba: true }));
   }
   etapas.push(["alturas de las 2 mejores direcciones por llenado", alturas]);
   etapas.push(["con la casa usando 15 L/min desde la dosis", consumo]);
   etapas.push(["firmeza de la mejor (malla y puntería)", firmeza]);
+  etapas.push(["dónde echar el cloro con la recomendada", dosis]);
   return etapas;
 }
 
@@ -309,7 +317,7 @@ function reporte(hechos) {
         L.push(`- az ${az} el ${el}: ${celdas.filter(Boolean).join("; ")}`);
       }
     }
-    const fir = todos.filter((r) => r.llenado === llenado && !nominal(r));
+    const fir = todos.filter((r) => r.llenado === llenado && !enMalla(r));
     if (fir.length) {
       L.push("", "Firmeza (t95 / ±10 % en min; nominal: celdas de 10 cm y puntería exacta):", "");
       for (const k of [...new Set(fir.map((r) => `${r.az}|${r.el}`))]) {
@@ -322,7 +330,23 @@ function reporte(hechos) {
         L.push(`- az ${az} el ${el}: ${rs.map(([n, r]) => `${n} ${fmt(r.t95)} / ${fmt(r.t10)}`).join("; ")}. t95 ${media.toFixed(1)} ± ${desv.toFixed(1)}`);
       }
     }
-    const con = todos.filter((r) => r.llenado === llenado && r.consumo);
+    const rec = RECOMENDADA[llenado];
+    const dos = [["por el flotador", {}], ["por el flotador, casa a 15 L/min", { consumo: 15 }],
+      ["por el flotador, casa a 15 L/min, sin bomba", { consumo: 15, sin_bomba: true }], ["junto al tubo", { dosis: "mastil" }],
+      ["junto al tubo, casa a 15 L/min", { dosis: "mastil", consumo: 15 }],
+      ["junto al tubo, casa a 15 L/min, sin bomba", { dosis: "mastil", consumo: 15, sin_bomba: true }]]
+      .map(([n, v]) => [n, hechos.get(caso({ tipo: "propuesta", llenado, ...rec, ...v }).id) ??
+        // sin bomba no importa hacia dónde apunta: sirve el de la etapa de consumo
+        (v.sin_bomba ? todos.find((r) => r.llenado === llenado && r.sin_bomba && r.consumo === v.consumo &&
+          (r.dosis ?? "llenado") === (v.dosis ?? "llenado")) : undefined)]).filter(([, r]) => r);
+    if (dos.some(([, r]) => r.dosis === "mastil")) {
+      L.push("", `Dónde echar el cloro, con la recomendada (az ${rec.az}, el ${rec.el}, 50 cm):`, "",
+        "| cloro | t95 | ±10 % | pico | a la casa en 10 min | en 45 min |", "|---|---|---|---|---|---|");
+      for (const [n, r] of dos) {
+        L.push(`| ${n} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${r.consumo ? (100 * r.sale10).toFixed(1) + " %" : "-"} | ${r.consumo ? (100 * r.sale45).toFixed(1) + " %" : "-"} |`);
+      }
+    }
+    const con = todos.filter((r) => r.llenado === llenado && r.consumo && nominal(r));
     if (con.length) {
       L.push("", "Con la casa usando 15 L/min desde que se echa el cloro:", "",
         "| caso | t95 | cloro que se fue a la casa en 10 min | en 45 min |", "|---|---|---|---|");
