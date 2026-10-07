@@ -20,8 +20,14 @@ export const CFL_FLUJO = 0.9;
 export const G = 9.81;
 export const K_MEZCLA = 10.2;
 export const LUGARES_DOSIS = Object.freeze(["llenado", "mastil"]);
+export const FORMAS = Object.freeze(["rectangular", "redonda"]);
+// Presión de la cisterna redonda: gradiente conjugado hasta max|r| <= TOL_PRESION * max|b|.
+export const TOL_PRESION = 1e-8;
+export const MAX_IT_PRESION = 300;
 
 export const DEFAULTS = Object.freeze({
+  // diametro 3.26 es supuesto: el cilindro de 10 m3 con 1.20 m de agua (pi R^2 1.20 = 10.0)
+  forma: "rectangular", diametro: 3.26,
   largo: 3.40, ancho: 2.45, nivel: 1.20, z_tapa: 1.35, dx: 0.10,
   q_max_lh: 800, h_max_m: 5, salida_mm: 8, boquilla_mm: 8, k_salida: 1.0,
   boca: Object.freeze([1.20, 1.00]), angulo_tubo: 60, z_bomba: 0.50, z_orp: 0.20,
@@ -61,6 +67,7 @@ export function configura(parcial = {}) {
     const v = parcial[k] !== undefined ? parcial[k] : DEFAULTS[k];
     if (v !== undefined) cfg[k] = Array.isArray(v) ? v.slice() : v;
   }
+  if (cfg.forma === "redonda") cfg.largo = cfg.ancho = cfg.diametro;
   return cfg;
 }
 
@@ -68,8 +75,14 @@ function rad(g) {
   return g * (Math.PI / 180);
 }
 
+// Hacia la esquina opuesta a la boca; en la redonda, hacia el lado opuesto (por el centro).
 function rumbo(c) {
   const [bx, by] = c.boca;
+  if (c.forma === "redonda") {
+    const hx = c.diametro / 2 - bx, hy = c.diametro / 2 - by;
+    const n = Math.hypot(hx, hy);
+    return n < 1e-3 ? [1.0, 0.0] : [hx / n, hy / n];
+  }
   const ex = bx < c.largo / 2 ? c.largo : 0.0;
   const ey = by < c.ancho / 2 ? c.ancho : 0.0;
   const hx = ex - bx, hy = ey - by;
@@ -128,7 +141,11 @@ function sondas(c) {
 
 export function geometria(cfgParcial = {}) {
   const c = configura(cfgParcial);
+  const redonda = c.forma === "redonda", r = c.diametro / 2;
   return {
+    forma: c.forma,
+    centro: [c.largo / 2, c.ancho / 2],
+    radio: redonda ? r : null,
     rumbo: rumbo(c),
     punto_tubo: (z) => puntoTubo(c, z),
     pos_bomba: posBomba(c),
@@ -137,7 +154,7 @@ export function geometria(cfgParcial = {}) {
     punto_dosis: puntoDosis(c),
     sondas: sondas(c),
     fuente_llenado: fuenteLlenado(c),
-    volumen_m3: c.largo * c.ancho * c.nivel,
+    volumen_m3: redonda ? Math.PI * r * r * c.nivel : c.largo * c.ancho * c.nivel,
   };
 }
 
@@ -152,7 +169,7 @@ function fmt(x) {
 export function validar(cfgParcial = {}) {
   const c = configura(cfgParcial);
   const errores = [];
-  const positivos = ["largo", "ancho", "nivel", "dx", "q_max_lh", "h_max_m", "salida_mm", "boquilla_mm",
+  const positivos = ["diametro", "largo", "ancho", "nivel", "dx", "q_max_lh", "h_max_m", "salida_mm", "boquilla_mm",
     "minutos", "dosis_ml"];
   for (const nombre of positivos) {
     if (c[nombre] === undefined) continue;
@@ -168,6 +185,7 @@ export function validar(cfgParcial = {}) {
   if (c.elevacion != null && !(c.elevacion >= -90 && c.elevacion <= 90)) {
     errores.push("elevacion debe estar entre -90 y 90 grados");
   }
+  if (!FORMAS.includes(c.forma)) errores.push('forma debe ser "rectangular" o "redonda"');
   if (!LUGARES_DOSIS.includes(c.lugar_dosis) && !esPunto(c.lugar_dosis, 3)) {
     errores.push('lugar_dosis debe ser "llenado", "mastil" o un punto [x, y, z]');
   }
@@ -182,7 +200,10 @@ export function validar(cfgParcial = {}) {
   if (errores.length) throw new Error(errores.join("; "));
 
   // en z la malla usa max(4, ...) por sí sola, así que la regla solo aplica en planta
-  if (Math.min(c.largo, c.ancho) / c.dx < 4) {
+  const redonda = c.forma === "redonda";
+  if (redonda && c.diametro / c.dx < 8) {
+    errores.push("dx muy grande: se necesitan al menos 8 celdas a lo largo del diámetro");
+  } else if (Math.min(c.largo, c.ancho) / c.dx < 4) {
     errores.push("dx muy grande: se necesitan al menos 4 celdas a lo largo y a lo ancho");
   }
   const zb = posBomba(c)[2];
@@ -196,8 +217,11 @@ export function validar(cfgParcial = {}) {
     "boca (sonda de superficie)": [c.boca[0], c.boca[1], c.nivel - 0.10],
   };
   if (c.consumo_lpm > 0) puntos.llenado = fuenteLlenado(c);
+  // en la redonda, a media celda o más de la pared
+  const r = c.diametro / 2, rMax = r - 0.5 * c.dx;
   for (const [nombre, [x, y, z]] of Object.entries(puntos)) {
-    if (!(x > 0 && x < c.largo && y > 0 && y < c.ancho && z > 0 && z < c.nivel)) {
+    const enPlanta = redonda ? Math.hypot(x - r, y - r) <= rMax : x > 0 && x < c.largo && y > 0 && y < c.ancho;
+    if (!(enPlanta && z > 0 && z < c.nivel)) {
       errores.push(`${nombre} (${fmt(x)}, ${fmt(y)}, ${fmt(z)}) queda fuera del agua o de la cisterna`);
     }
   }
@@ -249,8 +273,8 @@ function tri(a, ni, nj, nk, fi, fj, fk) {
 }
 
 // Pesos gaussianos normalizados (suma 1) en los puntos de un arreglo; normal >= 0 excluye
-// las caras de pared de ese eje.
-function gaussNormalizado(dst, dims, off, h, centro, sigma, normal = -1) {
+// las caras de pared de ese eje y col (columnas i * nj + j, bit 1 = abierta) las cerradas.
+function gaussNormalizado(dst, dims, off, h, centro, sigma, normal = -1, col = null) {
   const [ni, nj, nk] = dims;
   const den = 2 * sigma ** 2;
   let suma = 0;
@@ -259,10 +283,11 @@ function gaussNormalizado(dst, dims, off, h, centro, sigma, normal = -1) {
     const rx = (i + off[0]) * h[0] - centro[0];
     for (let j = 0; j < nj; j++) {
       const ry = (j + off[1]) * h[1] - centro[1];
+      const cerrada = col !== null && !(col[i * nj + j] & 1);
       for (let k = 0; k < nk; k++, m++) {
         const rz = (k + off[2]) * h[2] - centro[2];
-        const pared = (normal === 0 && (i === 0 || i === ni - 1)) || (normal === 1 && (j === 0 || j === nj - 1)) ||
-          (normal === 2 && (k === 0 || k === nk - 1));
+        const pared = cerrada || (normal === 0 && (i === 0 || i === ni - 1)) ||
+          (normal === 1 && (j === 0 || j === nj - 1)) || (normal === 2 && (k === 0 || k === nk - 1));
         const wv = pared ? 0 : Math.exp(-(rx ** 2 + ry ** 2 + rz ** 2) / den);
         dst[m] = wv;
         suma += wv;
@@ -422,6 +447,7 @@ export class Cisterna {
 
     const h = [this.dx, this.dy, this.dz];
     this._h = h;
+    this._mascaras(cfg);
     this.bomba = puntoOperacion(cfg.q_max_lh, cfg.h_max_m, cfg.boquilla_mm, cfg.salida_mm, cfg.k_salida);
     // Aceleración del chorro en cada cara; su integral en el volumen es M * dir.
     const boq = this.geo.pos_bomba, d = this.geo.dir_chorro;
@@ -429,7 +455,8 @@ export class Cisterna {
     const sigma = 0.6 * this.delta;
     const m = this.bomba.m_m4s2;
     const fuerza = (n, dims, off, eje) => {
-      const f = gaussNormalizado(new Float64Array(n), dims, off, h, centro, sigma, eje);
+      const col = this.redonda ? [this._cu, this._cv, this._cw][eje] : null;
+      const f = gaussNormalizado(new Float64Array(n), dims, off, h, centro, sigma, eje, col);
       for (let q = 0; q < n; q++) f[q] = m * d[eje] * f[q] / this.volCelda;
       return f;
     };
@@ -449,9 +476,9 @@ export class Cisterna {
     this._fWoff = new Float64Array(nW);
     this._sDiv = null;
     if (this.q > 0) {
-      const fuente = this.geo.fuente_llenado;
-      const wPozo = gaussNormalizado(new Float64Array(nc), [nx, ny, nz], OFF_C, h, cfg.pozo, this.delta);
-      const wLl = gaussNormalizado(new Float64Array(nc), [nx, ny, nz], OFF_C, h, fuente, this.delta);
+      const fuente = this.geo.fuente_llenado, col = this._colAgua;
+      const wPozo = gaussNormalizado(new Float64Array(nc), [nx, ny, nz], OFF_C, h, cfg.pozo, this.delta, -1, col);
+      const wLl = gaussNormalizado(new Float64Array(nc), [nx, ny, nz], OFF_C, h, fuente, this.delta, -1, col);
       this._wPozo = wPozo;
       this._sMas = new Float64Array(nc);
       this._sMenos = new Float64Array(nc);
@@ -465,7 +492,7 @@ export class Cisterna {
       for (let q = 0; q < nc; q++) this._tasaMax = Math.max(this._tasaMax, -this._sMenos[q]);
       const area = Math.PI * (cfg.llenado_mm / 1000) ** 2 / 4;
       this.mLlenado = this.q * this.q / area;
-      const wLlW = gaussNormalizado(new Float64Array(nW), [nx, ny, nz + 1], OFF_W, h, fuente, this.delta, 2);
+      const wLlW = gaussNormalizado(new Float64Array(nW), [nx, ny, nz + 1], OFF_W, h, fuente, this.delta, 2, col);
       this._fWon = new Float64Array(nW);
       for (let q = 0; q < nW; q++) {
         this._fWoff[q] = -this.mLlenado * wLlW[q] / this.volCelda;
@@ -492,6 +519,23 @@ export class Cisterna {
     this._dct = [matrizDct(nx), matrizDct(ny), matrizDct(nz)];
     this.invH2 = 1 / this.dx ** 2 + 1 / this.dy ** 2 + 1 / this.dz ** 2;
 
+    // Redonda: presión por gradiente conjugado con la DCT de la caja como precondicionador.
+    this.p = null;
+    this.tolPresion = TOL_PRESION;
+    this.presion = { iteraciones: 0, residuo: 0, total: 0, proyecciones: 0 };
+    this._avisoPresion = false;
+    if (this.redonda) {
+      this.p = new Float64Array(nc);
+      this._b = new Float64Array(nc);
+      this._r = new Float64Array(nc);
+      this._z = new Float64Array(nc);
+      this._d = new Float64Array(nc);
+      this._q = new Float64Array(nc);
+      // (-lap_caja) z = r  ->  z^ = r^ / (-lam), sin el modo constante
+      this._invLamNeg = new Float64Array(nc);
+      for (let q = 1; q < nc; q++) this._invLamNeg[q] = -1 / this._lam[q];
+    }
+
     this._uc = new Float64Array(nc);
     this._vc = new Float64Array(nc);
     this._wc = new Float64Array(nc);
@@ -508,6 +552,62 @@ export class Cisterna {
     this._dif = new Float64Array(nc);
   }
 
+  // Celdas de agua y caras abiertas por columna (la máscara no depende de k). En la rectangular
+  // todo es agua y solo cierran las paredes de la caja, así que los mismos ciclos dan lo de siempre.
+  //   agua[i*ny+j]          1 si la columna es agua
+  //   _cw[i*ny+j]           bits: 1 agua, 2 (i-1) agua, 4 (i+1), 8 (j-1), 16 (j+1)
+  //   _cu[i*ny+j]           cara u: 1 abierta, 2 cara (i, j-1) abierta, 4 (i, j+1)
+  //   _cv[i*(ny+1)+j]       cara v: 1 abierta, 2 cara (i-1, j) abierta, 4 (i+1, j)
+  //   _j0[i], _j1[i]        columnas de agua de la fila i: j0 <= j < j1 (el círculo es convexo)
+  _mascaras(cfg) {
+    const { nx, ny, nz, dx, dy } = this;
+    this.redonda = cfg.forma === "redonda";
+    const agua = new Uint8Array(nx * ny);
+    const cx = cfg.largo / 2, cy = cfg.ancho / 2, r2 = (cfg.diametro / 2) ** 2;
+    for (let i = 0; i < nx; i++) {
+      for (let j = 0; j < ny; j++) {
+        const xc = (i + 0.5) * dx - cx, yc = (j + 0.5) * dy - cy;
+        agua[i * ny + j] = !this.redonda || xc * xc + yc * yc <= r2 ? 1 : 0;
+      }
+    }
+    const es = (i, j) => (i >= 0 && i < nx && j >= 0 && j < ny && agua[i * ny + j] === 1 ? 1 : 0);
+    const abreU = (i, j) => (i >= 1 && i <= nx - 1 && j >= 0 && j < ny ? es(i - 1, j) & es(i, j) : 0);
+    const abreV = (i, j) => (j >= 1 && j <= ny - 1 && i >= 0 && i < nx ? es(i, j - 1) & es(i, j) : 0);
+    this._cw = new Uint8Array(nx * ny);
+    this._cu = new Uint8Array((nx + 1) * ny);
+    this._cv = new Uint8Array(nx * (ny + 1));
+    for (let i = 0; i <= nx; i++) {
+      for (let j = 0; j <= ny; j++) {
+        if (i < nx && j < ny) {
+          this._cw[i * ny + j] = es(i, j) | es(i - 1, j) << 1 | es(i + 1, j) << 2 | es(i, j - 1) << 3 | es(i, j + 1) << 4;
+        }
+        if (j < ny) this._cu[i * ny + j] = abreU(i, j) | abreU(i, j - 1) << 1 | abreU(i, j + 1) << 2;
+        if (i < nx) this._cv[i * (ny + 1) + j] = abreV(i, j) | abreV(i - 1, j) << 1 | abreV(i + 1, j) << 2;
+      }
+    }
+    this._j0 = new Int32Array(nx);
+    this._j1 = new Int32Array(nx);
+    let n = 0;
+    for (let i = 0; i < nx; i++) {
+      let j0 = ny, j1 = 0;
+      for (let j = 0; j < ny; j++) {
+        if (agua[i * ny + j]) {
+          j0 = Math.min(j0, j);
+          j1 = j + 1;
+          n++;
+        }
+      }
+      if (j1 === 0) j0 = 0;
+      for (let j = j0; j < j1; j++) if (!agua[i * ny + j]) throw new Error("máscara de agua no convexa");
+      this._j0[i] = j0;
+      this._j1[i] = j1;
+    }
+    this.agua = agua;
+    this._colAgua = this.redonda ? this._cw : null;
+    this.nAgua = n * nz;
+    this.volumenAgua = this.nAgua * this.volCelda; // discreto; el geométrico es geo.volumen_m3
+  }
+
   // ---- muestreo ----
 
   _arreglo(campo) {
@@ -520,9 +620,36 @@ export class Cisterna {
     }
   }
 
+  // En la redonda el cloro se interpola solo con las columnas de agua (pesos renormalizados): junto
+  // a la pared el muro no cuenta como agua sin cloro. Las velocidades sí valen 0 en la pared.
   muestrea(campo, x, y, z) {
     const [a, ni, nj, nk, off] = this._arreglo(campo);
-    return tri(a, ni, nj, nk, x / this.dx - off[0], y / this.dy - off[1], z / this.dz - off[2]);
+    const fi = x / this.dx - off[0], fj = y / this.dy - off[1], fk = z / this.dz - off[2];
+    return this.redonda && campo === "c" ? this._cEnAgua(fi, fj, fk) : tri(a, ni, nj, nk, fi, fj, fk);
+  }
+
+  _cEnAgua(fi, fj, fk) {
+    const { nx, ny, nz, agua, c } = this;
+    fi = Math.min(Math.max(fi, 0), nx - 1);
+    fj = Math.min(Math.max(fj, 0), ny - 1);
+    const i0 = Math.min(Math.floor(fi), nx - 2), j0 = Math.min(Math.floor(fj), ny - 2);
+    const ti = fi - i0, tj = fj - j0;
+    if (agua[i0 * ny + j0] && agua[i0 * ny + j0 + 1] && agua[(i0 + 1) * ny + j0] && agua[(i0 + 1) * ny + j0 + 1]) {
+      return tri(c, nx, ny, nz, fi, fj, fk);
+    }
+    fk = Math.min(Math.max(fk, 0), nz - 1);
+    const k0 = Math.min(Math.floor(fk), nz - 2), tk = fk - k0;
+    let s = 0, sp = 0;
+    for (let a = 0; a < 2; a++) {
+      for (let b = 0; b < 2; b++) {
+        if (!agua[(i0 + a) * ny + j0 + b]) continue;
+        const peso = (a ? ti : 1 - ti) * (b ? tj : 1 - tj);
+        const m = ((i0 + a) * ny + j0 + b) * nz + k0;
+        s += peso * (c[m] * (1 - tk) + c[m + 1] * tk);
+        sp += peso;
+      }
+    }
+    return sp > 0 ? s / sp : 0;
   }
 
   velocidadEn(x, y, z, out = [0, 0, 0]) {
@@ -572,12 +699,17 @@ export class Cisterna {
 
   _nuTurbulenta(fondo) {
     const { u, v, w, nx, ny, nz, dx, dy, dz } = this;
-    const uc = this._uc, vc = this._vc, wc = this._wc, nu = this.nu;
+    const uc = this._uc, vc = this._vc, wc = this._wc, nu = this.nu, agua = this.agua;
     const nyz = ny * nz;
     const cd2 = (this.cfg.cs * this.delta) ** 2;
     let nuMax = 0;
+    // fuera del agua nu se queda en NU_AGUA: ninguna cara abierta la usa y no limita el paso
     for (let i = 0, m = 0; i < nx; i++) {
       for (let j = 0; j < ny; j++) {
+        if (!agua[i * ny + j]) {
+          m += nz;
+          continue;
+        }
         const iv = (i * (ny + 1) + j) * nz;
         const iw = (i * ny + j) * (nz + 1);
         for (let k = 0; k < nz; k++, m++) {
@@ -598,10 +730,11 @@ export class Cisterna {
     this.nuMax = nuMax;
   }
 
-  // Advección semi-lagrangiana RK2 de un arreglo de caras; salta las caras de pared del eje normal.
+  // Advección semi-lagrangiana RK2 de un arreglo de caras; salta las caras de pared del eje normal
+  // y pone en 0 las columnas cerradas (col[i * nj + j], bit 1 = abierta).
   // Es la misma interpolación de tri(), escrita en línea: V8 no la integra sola y cada llamada
   // con argumentos double asignaría memoria.
-  _advecta(dst, a, ni, nj, nk, off, normal, dt) {
+  _advecta(dst, a, ni, nj, nk, off, normal, dt, col) {
     const { u, v, w, nx, ny, nz, dx, dy, dz } = this;
     const sxU = ny * nz, sxV = (ny + 1) * nz, syW = nz + 1, sxW = ny * (nz + 1), sxA = nj * nk;
     const o0 = off[0], o1 = off[1], o2 = off[2];
@@ -614,6 +747,10 @@ export class Cisterna {
       for (let j = j0; j < j1; j++) {
         const y = (j + o1) * dy;
         let m = (i * nj + j) * nk + k0;
+        if (!(col[i * nj + j] & 1)) {
+          dst.fill(0, m, m + k1 - k0);
+          continue;
+        }
         for (let k = k0; k < k1; k++, m++) {
           const z = (k + o2) * dz;
           // Velocidad en la propia cara: la trilineal de Python cae justo en promedios de 4 caras.
@@ -708,18 +845,23 @@ export class Cisterna {
     }
   }
 
-  // Difusión explícita con celdas fantasma (-1 sin deslizamiento, +1 desliza) y fuerza.
+  // Difusión explícita con celdas fantasma (-1 sin deslizamiento, +1 desliza) y fuerza, solo en
+  // caras abiertas. Un vecino tangencial cerrado (pared de la caja o escalón del círculo) es
+  // fantasma -u; uno normal cerrado vale 0 en el arreglo.
   _difundeU(dt, f) {
     const { nx, ny, nz } = this;
-    const a = this.u, dst = this._un, nu = this.nu;
+    const a = this.u, dst = this._un, nu = this.nu, cu = this._cu;
     const dx2 = this.dx ** 2, dy2 = this.dy ** 2, dz2 = this.dz ** 2;
     const nyz = ny * nz;
     for (let i = 1; i < nx; i++) {
       for (let j = 0; j < ny; j++) {
+        const g = cu[i * ny + j];
+        if (!(g & 1)) continue;
+        const jmOk = g & 2, jpOk = g & 4;
         let m = (i * ny + j) * nz;
         for (let k = 0; k < nz; k++, m++) {
           const a0 = a[m];
-          const jm = j > 0 ? a[m - nz] : -a0, jp = j < ny - 1 ? a[m + nz] : -a0;
+          const jm = jmOk ? a[m - nz] : -a0, jp = jpOk ? a[m + nz] : -a0;
           const km = k > 0 ? a[m - 1] : -a0, kp = k < nz - 1 ? a[m + 1] : a0;
           const lap = (a[m + nyz] - 2 * a0 + a[m - nyz]) / dx2 + (jp - 2 * a0 + jm) / dy2 + (kp - 2 * a0 + km) / dz2;
           dst[m] += dt * (0.5 * (nu[m] + nu[m - nyz]) * lap + f[m]);
@@ -730,16 +872,19 @@ export class Cisterna {
 
   _difundeV(dt, f) {
     const { nx, ny, nz } = this;
-    const a = this.v, dst = this._vn, nu = this.nu;
+    const a = this.v, dst = this._vn, nu = this.nu, cv = this._cv;
     const dx2 = this.dx ** 2, dy2 = this.dy ** 2, dz2 = this.dz ** 2;
     const si = (ny + 1) * nz;
     for (let i = 0; i < nx; i++) {
       for (let j = 1; j < ny; j++) {
+        const g = cv[i * (ny + 1) + j];
+        if (!(g & 1)) continue;
+        const imOk = g & 2, ipOk = g & 4;
         let m = (i * (ny + 1) + j) * nz;
         let mc = (i * ny + j) * nz;
         for (let k = 0; k < nz; k++, m++, mc++) {
           const a0 = a[m];
-          const im = i > 0 ? a[m - si] : -a0, ip = i < nx - 1 ? a[m + si] : -a0;
+          const im = imOk ? a[m - si] : -a0, ip = ipOk ? a[m + si] : -a0;
           const km = k > 0 ? a[m - 1] : -a0, kp = k < nz - 1 ? a[m + 1] : a0;
           const lap = (ip - 2 * a0 + im) / dx2 + (a[m + nz] - 2 * a0 + a[m - nz]) / dy2 + (kp - 2 * a0 + km) / dz2;
           dst[m] += dt * (0.5 * (nu[mc] + nu[mc - nz]) * lap + f[m]);
@@ -750,17 +895,20 @@ export class Cisterna {
 
   _difundeW(dt, f) {
     const { nx, ny, nz } = this;
-    const a = this.w, dst = this._wn, nu = this.nu;
+    const a = this.w, dst = this._wn, nu = this.nu, cw = this._cw;
     const dx2 = this.dx ** 2, dy2 = this.dy ** 2, dz2 = this.dz ** 2;
     const nz1 = nz + 1, si = ny * nz1;
     for (let i = 0; i < nx; i++) {
       for (let j = 0; j < ny; j++) {
+        const g = cw[i * ny + j];
+        if (!(g & 1)) continue;
+        const imOk = g & 2, ipOk = g & 4, jmOk = g & 8, jpOk = g & 16;
         let m = (i * ny + j) * nz1 + 1;
         let mc = (i * ny + j) * nz + 1;
         for (let k = 1; k < nz; k++, m++, mc++) {
           const a0 = a[m];
-          const im = i > 0 ? a[m - si] : -a0, ip = i < nx - 1 ? a[m + si] : -a0;
-          const jm = j > 0 ? a[m - nz1] : -a0, jp = j < ny - 1 ? a[m + nz1] : -a0;
+          const im = imOk ? a[m - si] : -a0, ip = ipOk ? a[m + si] : -a0;
+          const jm = jmOk ? a[m - nz1] : -a0, jp = jpOk ? a[m + nz1] : -a0;
           const lap = (ip - 2 * a0 + im) / dx2 + (jp - 2 * a0 + jm) / dy2 + (a[m + 1] - 2 * a0 + a[m - 1]) / dz2;
           dst[m] += dt * (0.5 * (nu[mc] + nu[mc - 1]) * lap + f[m]);
         }
@@ -800,6 +948,10 @@ export class Cisterna {
 
   // Resuelve lap(p) = (div(u*) - s) / dt y corrige: div(u) = s (s = 0 sin consumo).
   _proyecta(dt) {
+    if (this.redonda) {
+      this._proyectaRedonda(dt);
+      return;
+    }
     const { nx, ny, nz, dx, dy, dz } = this;
     const un = this._un, vn = this._vn, wn = this._wn;
     const rhs = this._t1, ph = this._t2, s = this._sDiv;
@@ -837,13 +989,176 @@ export class Cisterna {
     }
   }
 
+  // out = -A p en las celdas de agua, con A p = suma sobre caras abiertas de (p_vecino - p) / h^2.
+  // Un vecino cerrado apunta a la propia celda (desplazamiento 0) y no aporta.
+  _menosA(p, out) {
+    const { nx, ny, nz } = this;
+    const cw = this._cw, j0 = this._j0, j1 = this._j1;
+    const ix2 = 1 / this.dx ** 2, iy2 = 1 / this.dy ** 2, iz2 = 1 / this.dz ** 2;
+    const nyz = ny * nz;
+    for (let i = 0; i < nx; i++) {
+      for (let j = j0[i]; j < j1[i]; j++) {
+        const g = cw[i * ny + j];
+        const oxm = g & 2 ? -nyz : 0, oxp = g & 4 ? nyz : 0, oym = g & 8 ? -nz : 0, oyp = g & 16 ? nz : 0;
+        let m = (i * ny + j) * nz;
+        for (let k = 0; k < nz; k++, m++) {
+          const p0 = p[m];
+          let a = ((p[m + oxm] - p0) + (p[m + oxp] - p0)) * ix2 + ((p[m + oym] - p0) + (p[m + oyp] - p0)) * iy2;
+          if (k > 0) a += (p[m - 1] - p0) * iz2;
+          if (k < nz - 1) a += (p[m + 1] - p0) * iz2;
+          out[m] = -a;
+        }
+      }
+    }
+  }
+
+  // Precondicionador: (-lap_caja) z = r con r extendida con 0 fuera del agua (DCT exacta), luego
+  // z = 0 fuera del agua y sin su media sobre el agua.
+  _precondiciona(r, z) {
+    const { ny, nz } = this;
+    const t1 = this._t1, t2 = this._t2, il = this._invLamNeg, j0 = this._j0, j1 = this._j1;
+    t1.set(r);
+    this._dct3(t1, t2, false);
+    for (let m = 0; m < t2.length; m++) t2[m] *= il[m];
+    this._dct3(t2, t1, true);
+    let s = 0;
+    for (let i = 0; i < this.nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) s += t1[m];
+    }
+    const media = s / this.nAgua;
+    for (let i = 0; i < this.nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) z[m] = t1[m] - media;
+    }
+  }
+
+  _puntoAgua(a, b) {
+    const { ny, nz } = this;
+    const j0 = this._j0, j1 = this._j1;
+    let s = 0;
+    for (let i = 0; i < this.nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) s += a[m] * b[m];
+    }
+    return s;
+  }
+
+  // Cisterna redonda: (-A) p = -b en las celdas de agua con gradiente conjugado precondicionado,
+  // arrancando de la p del paso anterior; b = (div(u*) - s) / dt sin su media sobre el agua.
+  // Los vectores del gradiente conjugado solo se escriben en el agua: afuera siempre valen 0.
+  _proyectaRedonda(dt) {
+    const { nx, ny, nz, dx, dy, dz } = this;
+    const un = this._un, vn = this._vn, wn = this._wn, s = this._sDiv;
+    const p = this.p, b = this._b, r = this._r, z = this._z, d = this._d, q = this._q;
+    const cu = this._cu, cv = this._cv, j0 = this._j0, j1 = this._j1;
+    const nyz = ny * nz;
+    let suma = 0;
+    for (let i = 0; i < nx; i++) {
+      for (let j = j0[i]; j < j1[i]; j++) {
+        let m = (i * ny + j) * nz;
+        const iv = (i * (ny + 1) + j) * nz;
+        const iw = (i * ny + j) * (nz + 1);
+        for (let k = 0; k < nz; k++, m++) {
+          const div = (un[m + nyz] - un[m]) / dx + (vn[iv + k + nz] - vn[iv + k]) / dy + (wn[iw + k + 1] - wn[iw + k]) / dz;
+          const val = s === null ? div / dt : (div - s[m]) / dt;
+          b[m] = val;
+          suma += val;
+        }
+      }
+    }
+    const media = suma / this.nAgua;
+    let bMax = 0;
+    for (let i = 0; i < nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) {
+        b[m] -= media;
+        const a = Math.abs(b[m]);
+        if (a > bMax) bMax = a;
+      }
+    }
+    const est = this.presion;
+    est.proyecciones++;
+    if (bMax === 0) {
+      p.fill(0);
+      est.iteraciones = 0;
+      est.residuo = 0;
+      return;
+    }
+
+    // r = -b - (-A) p
+    this._menosA(p, q);
+    let rMax = 0;
+    for (let i = 0; i < nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) {
+        r[m] = -b[m] - q[m];
+        const a = Math.abs(r[m]);
+        if (a > rMax) rMax = a;
+      }
+    }
+    const lim = this.tolPresion * bMax;
+    let it = 0;
+    if (rMax > lim) {
+      this._precondiciona(r, z);
+      d.set(z);
+      let rz = this._puntoAgua(r, z);
+      for (;;) {
+        it++;
+        this._menosA(d, q);
+        const alfa = rz / this._puntoAgua(d, q);
+        rMax = 0;
+        for (let i = 0; i < nx; i++) {
+          for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) {
+            p[m] += alfa * d[m];
+            r[m] -= alfa * q[m];
+            const a = Math.abs(r[m]);
+            if (a > rMax) rMax = a;
+          }
+        }
+        if (rMax <= lim || it >= MAX_IT_PRESION) break;
+        this._precondiciona(r, z);
+        const rzNuevo = this._puntoAgua(r, z);
+        const beta = rzNuevo / rz;
+        rz = rzNuevo;
+        for (let i = 0; i < nx; i++) {
+          for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) d[m] = z[m] + beta * d[m];
+        }
+      }
+    }
+    est.iteraciones = it;
+    est.residuo = rMax / bMax;
+    est.total += it;
+    if (rMax > lim && !this._avisoPresion) {
+      this._avisoPresion = true;
+      console.warn(`presión: el gradiente conjugado no llegó a la tolerancia en ${MAX_IT_PRESION} iteraciones ` +
+        `(residuo relativo ${est.residuo.toExponential(2)})`);
+    }
+
+    for (let i = 1; i < nx; i++) {
+      for (let j = 0; j < ny; j++) {
+        if (!(cu[i * ny + j] & 1)) continue;
+        const m0 = (i * ny + j) * nz;
+        for (let m = m0; m < m0 + nz; m++) un[m] -= dt * (p[m] - p[m - nyz]) / dx;
+      }
+    }
+    for (let i = 0; i < nx; i++) {
+      for (let j = 1; j < ny; j++) {
+        if (!(cv[i * (ny + 1) + j] & 1)) continue;
+        const iv = (i * (ny + 1) + j) * nz, mc = (i * ny + j) * nz;
+        for (let k = 0; k < nz; k++) vn[iv + k] -= dt * (p[mc + k] - p[mc + k - nz]) / dy;
+      }
+    }
+    for (let i = 0; i < nx; i++) {
+      for (let j = j0[i]; j < j1[i]; j++) {
+        const iw = (i * ny + j) * (nz + 1), mc = (i * ny + j) * nz;
+        for (let k = 1; k < nz; k++) wn[iw + k] -= dt * (p[mc + k] - p[mc + k - 1]) / dz;
+      }
+    }
+  }
+
   _pasoFlujo(dt, encendida) {
     const { nx, ny, nz } = this;
     this._centros();
     this._nuTurbulenta(encendida ? this.nuFondo : this.nuFondoSinBomba);
-    this._advecta(this._un, this.u, nx + 1, ny, nz, OFF_U, 0, dt);
-    this._advecta(this._vn, this.v, nx, ny + 1, nz, OFF_V, 1, dt);
-    this._advecta(this._wn, this.w, nx, ny, nz + 1, OFF_W, 2, dt);
+    this._advecta(this._un, this.u, nx + 1, ny, nz, OFF_U, 0, dt, this._cu);
+    this._advecta(this._vn, this.v, nx, ny + 1, nz, OFF_V, 1, dt, this._cv);
+    this._advecta(this._wn, this.w, nx, ny, nz + 1, OFF_W, 2, dt, this._cw);
     this._difundeU(dt, encendida ? this._fUon : this._fUoff);
     this._difundeV(dt, encendida ? this._fVon : this._fVoff);
     this._difundeW(dt, encendida ? this._fWon : this._fWoff);
@@ -878,38 +1193,47 @@ export class Cisterna {
   // ---- cloro ----
 
   // Flujo MUSCL con limitador van Leer: solo hace falta la pendiente de la celda de barlovento.
-  // Pendiente de van Leer: 2ab/(a+b) si a y b tienen el mismo signo, 0 en las celdas del borde.
+  // Pendiente de van Leer: 2ab/(a+b) si a y b tienen el mismo signo; un vecino fuera del agua (o
+  // de la caja) toma el valor de la celda propia. Las caras cerradas nunca se escriben: flujo 0.
   _dcdt(c, out) {
     const { u, v, w, nx, ny, nz, dx, dy, dz } = this;
     const d = this._dif, fx = this._flx, fy = this._fly, fz = this._flz;
+    const cu = this._cu, cv = this._cv, cw = this._cw;
     const nyz = ny * nz, ny1 = ny + 1, nz1 = nz + 1;
 
     for (let i = 0; i < nx - 1; i++) {
-      for (let m = i * nyz; m < (i + 1) * nyz; m++) {
-        const mp = m + nyz, c0 = c[m], c1 = c[mp], vf = u[mp];
-        let cf;
-        if (vf > 0) {
-          const a = i > 0 ? c0 - c[m - nyz] : 0, b = c1 - c0, ab = a * b;
-          cf = c0 + 0.5 * (ab > 0 ? 2 * ab / (a + b) : 0.0);
-        } else {
-          const a = c1 - c0, b = i < nx - 2 ? c[mp + nyz] - c1 : 0, ab = a * b;
-          cf = c1 - 0.5 * (ab > 0 ? 2 * ab / (a + b) : 0.0);
+      for (let j = 0; j < ny; j++) {
+        if (!(cu[(i + 1) * ny + j] & 1)) continue;
+        const atrasOk = cw[i * ny + j] & 2, adelanteOk = cw[(i + 1) * ny + j] & 4;
+        let m = (i * ny + j) * nz;
+        for (let k = 0; k < nz; k++, m++) {
+          const mp = m + nyz, c0 = c[m], c1 = c[mp], vf = u[mp];
+          let cf;
+          if (vf > 0) {
+            const a = atrasOk ? c0 - c[m - nyz] : 0, b = c1 - c0, ab = a * b;
+            cf = c0 + 0.5 * (ab > 0 ? 2 * ab / (a + b) : 0.0);
+          } else {
+            const a = c1 - c0, b = adelanteOk ? c[mp + nyz] - c1 : 0, ab = a * b;
+            cf = c1 - 0.5 * (ab > 0 ? 2 * ab / (a + b) : 0.0);
+          }
+          fx[mp] = vf * cf - 0.5 * (d[m] + d[mp]) * (c1 - c0) / dx;
         }
-        fx[mp] = vf * cf - 0.5 * (d[m] + d[mp]) * (c1 - c0) / dx;
       }
     }
     for (let i = 0; i < nx; i++) {
       for (let j = 0; j < ny - 1; j++) {
+        if (!(cv[i * ny1 + j + 1] & 1)) continue;
+        const atrasOk = cw[i * ny + j] & 8, adelanteOk = cw[i * ny + j + 1] & 16;
         let m = (i * ny + j) * nz;
         const iv = (i * ny1 + j + 1) * nz;
         for (let k = 0; k < nz; k++, m++) {
           const mp = m + nz, c0 = c[m], c1 = c[mp], vf = v[iv + k];
           let cf;
           if (vf > 0) {
-            const a = j > 0 ? c0 - c[m - nz] : 0, b = c1 - c0, ab = a * b;
+            const a = atrasOk ? c0 - c[m - nz] : 0, b = c1 - c0, ab = a * b;
             cf = c0 + 0.5 * (ab > 0 ? 2 * ab / (a + b) : 0.0);
           } else {
-            const a = c1 - c0, b = j < ny - 2 ? c[mp + nz] - c1 : 0, ab = a * b;
+            const a = c1 - c0, b = adelanteOk ? c[mp + nz] - c1 : 0, ab = a * b;
             cf = c1 - 0.5 * (ab > 0 ? 2 * ab / (a + b) : 0.0);
           }
           fy[iv + k] = vf * cf - 0.5 * (d[m] + d[mp]) * (c1 - c0) / dy;
@@ -918,6 +1242,7 @@ export class Cisterna {
     }
     for (let i = 0; i < nx; i++) {
       for (let j = 0; j < ny; j++) {
+        if (!(cw[i * ny + j] & 1)) continue;
         const mb = (i * ny + j) * nz;
         const iw = (i * ny + j) * nz1 + 1;
         for (let k = 0; k < nz - 1; k++) {
@@ -939,6 +1264,11 @@ export class Cisterna {
     const sMas = this._sMas, sMenos = this._sMenos, cin = this.cfg.c_llenado_mg_l;
     for (let i = 0, m = 0; i < nx; i++) {
       for (let j = 0; j < ny; j++) {
+        if (!(cw[i * ny + j] & 1)) {
+          out.fill(0, m, m + nz);
+          m += nz;
+          continue;
+        }
         const iv = (i * ny1 + j) * nz;
         const iw = (i * ny + j) * nz1;
         for (let k = 0; k < nz; k++, m++) {
@@ -975,10 +1305,10 @@ export class Cisterna {
 
   dosifica(masa_mg, punto, sigma) {
     const { nx, ny, nz } = this;
-    const wv = gaussNormalizado(this._c1, [nx, ny, nz], OFF_C, this._h, punto, sigma || this.delta);
+    const wv = gaussNormalizado(this._c1, [nx, ny, nz], OFF_C, this._h, punto, sigma || this.delta, -1, this._colAgua);
     const c = this.c, den = this.volCelda * 1000.0;
     for (let m = 0; m < c.length; m++) c[m] += masa_mg * wv[m] / den; // mg / L
-    this.cFinal += masa_mg / (nx * ny * nz * this.volCelda * 1000.0);
+    this.cFinal += masa_mg / (this.nAgua * this.volCelda * 1000.0);
   }
 
   dosificaCfg() {
@@ -988,7 +1318,8 @@ export class Cisterna {
   // Toma el flujo y el cloro de otra cisterna con la misma malla (p. ej. al mover la bomba sin
   // reiniciar el agua). Regresa false y no copia nada si las mallas no coinciden.
   copiaEstado(otra) {
-    if (otra.nx !== this.nx || otra.ny !== this.ny || otra.nz !== this.nz) return false;
+    if (otra.nx !== this.nx || otra.ny !== this.ny || otra.nz !== this.nz || otra.redonda !== this.redonda) return false;
+    if (this.redonda) this.p.set(otra.p);
     this.u.set(otra.u);
     this.v.set(otra.v);
     this.w.set(otra.w);
@@ -1056,34 +1387,44 @@ export class Cisterna {
 
   energiaCinetica() {
     this._centros();
-    const uc = this._uc, vc = this._vc, wc = this._wc;
+    const uc = this._uc, vc = this._vc, wc = this._wc, { ny, nz } = this, j0 = this._j0, j1 = this._j1;
     let s = 0;
-    for (let m = 0; m < uc.length; m++) s += uc[m] ** 2 + vc[m] ** 2 + wc[m] ** 2;
-    return 0.5 * (s / uc.length);
+    for (let i = 0; i < this.nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) s += uc[m] ** 2 + vc[m] ** 2 + wc[m] ** 2;
+    }
+    return 0.5 * (s / this.nAgua);
   }
 
-  // cov = desviación / media actual (con consumo la media baja); cmin y cmax relativos a cFinal
-  // (en mg/L si todavía no hay dosis); cmedia en mg/L.
+  // Solo sobre las celdas de agua. cov = desviación / media actual (con consumo la media baja);
+  // cmin y cmax relativos a cFinal (en mg/L si todavía no hay dosis); cmedia en mg/L.
   stats() {
-    const c = this.c, n = c.length, cf = this.cFinal;
+    const c = this.c, n = this.nAgua, cf = this.cFinal, { nx, ny, nz } = this, j0 = this._j0, j1 = this._j1;
     let sumaC = 0, suma = 0, cmin = Infinity, cmax = -Infinity;
-    for (let m = 0; m < n; m++) {
-      const r = cf > 0 ? c[m] / cf : c[m];
-      sumaC += c[m];
-      suma += r;
-      if (r < cmin) cmin = r;
-      if (r > cmax) cmax = r;
+    for (let i = 0; i < nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) {
+        const r = cf > 0 ? c[m] / cf : c[m];
+        sumaC += c[m];
+        suma += r;
+        if (r < cmin) cmin = r;
+        if (r > cmax) cmax = r;
+      }
     }
     const media = suma / n;
     let var2 = 0;
-    for (let m = 0; m < n; m++) var2 += ((cf > 0 ? c[m] / cf : c[m]) - media) ** 2;
+    for (let i = 0; i < nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) {
+        var2 += ((cf > 0 ? c[m] / cf : c[m]) - media) ** 2;
+      }
+    }
     this._centros();
     const uc = this._uc, vc = this._vc, wc = this._wc;
     let ek = 0, v2max = 0;
-    for (let m = 0; m < n; m++) {
-      const q = uc[m] ** 2 + vc[m] ** 2 + wc[m] ** 2;
-      ek += q;
-      if (q > v2max) v2max = q;
+    for (let i = 0; i < nx; i++) {
+      for (let m = (i * ny + j0[i]) * nz, fin = (i * ny + j1[i]) * nz; m < fin; m++) {
+        const q = uc[m] ** 2 + vc[m] ** 2 + wc[m] ** 2;
+        ek += q;
+        if (q > v2max) v2max = q;
+      }
     }
     return {
       cov: media > 0 ? Math.sqrt(var2 / n) / media : 0, cmin, cmax,
@@ -1186,11 +1527,19 @@ export class Cisterna {
     const [hx, hy] = this.geo.plano_chorro;
     const [x0, y0] = this.geo.pos_bomba;
     let sMin = -Infinity, sMax = Infinity;
-    for (const [p0, hh, L] of [[x0, hx, cfg.largo], [y0, hy, cfg.ancho]]) {
-      if (Math.abs(hh) > 1e-12) {
-        const a = (0 - p0) / hh, b = (L - p0) / hh;
-        sMin = Math.max(sMin, Math.min(a, b));
-        sMax = Math.min(sMax, Math.max(a, b));
+    if (this.redonda) {
+      // cuerda del círculo por la bomba: |o + s h - centro| = R
+      const r = cfg.diametro / 2, ox = x0 - r, oy = y0 - r;
+      const bb = ox * hx + oy * hy, raiz = Math.sqrt(Math.max(bb * bb - (ox * ox + oy * oy - r * r), 0));
+      sMin = -bb - raiz;
+      sMax = -bb + raiz;
+    } else {
+      for (const [p0, hh, L] of [[x0, hx, cfg.largo], [y0, hy, cfg.ancho]]) {
+        if (Math.abs(hh) > 1e-12) {
+          const a = (0 - p0) / hh, b = (L - p0) / hh;
+          sMin = Math.max(sMin, Math.min(a, b));
+          sMax = Math.min(sMax, Math.max(a, b));
+        }
       }
     }
     const ns = Math.max(8, Math.trunc((sMax - sMin) / Math.min(this.dx, this.dy)) + 1);
