@@ -5,6 +5,7 @@ Ejemplos:
   python simular.py --nivel 0.7              # cisterna a medias
   python simular.py --elevacion 0 --azimut 0 # chorro horizontal a lo largo
   python simular.py --dosis mastil --precalentar 600   # protocolo de la prueba 9c
+  python simular.py --forma redonda --diametro 3.26    # cisterna cilíndrica
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from cisterna_sim.bomba import tiempo_mezcla_s
-from cisterna_sim.config import LUGARES_DOSIS, Config
+from cisterna_sim.config import FORMAS, LUGARES_DOSIS, Config
 from cisterna_sim.graficas import animar, graficar_flujo, graficar_mezcla
 from cisterna_sim.solver import correr
 
@@ -32,8 +33,10 @@ def _args():
     p.add_argument("--minutos", type=float, default=d.minutos, help="tiempo simulado después de la dosis")
     p.add_argument("--bomba-min", type=float, default=d.bomba_min, help="minutos que corre la bomba tras la dosis")
     p.add_argument("--dx", type=float, default=d.dx, help="tamaño de celda en m (0.07 tarda ~3x más)")
-    p.add_argument("--largo", type=float, default=d.largo)
-    p.add_argument("--ancho", type=float, default=d.ancho)
+    p.add_argument("--forma", choices=FORMAS, default=d.forma, help="planta de la cisterna")
+    p.add_argument("--diametro", type=float, default=d.diametro, help="m, con --forma redonda")
+    p.add_argument("--largo", type=float, default=d.largo, help="m, con --forma rectangular")
+    p.add_argument("--ancho", type=float, default=d.ancho, help="m, con --forma rectangular")
     p.add_argument("--nivel", type=float, default=d.nivel, help="nivel del agua en m")
     p.add_argument("--caudal-lh", type=float, default=d.q_max_lh, help="caudal máximo de la bomba (ficha)")
     p.add_argument("--hmax", type=float, default=d.h_max_m, help="columna máxima de la bomba en m (ficha)")
@@ -52,8 +55,8 @@ def _args():
     p.add_argument("--gpu", action="store_true", help="correr en GPU con CuPy (pip install cupy-cuda13x)")
     p.add_argument("--f32", action="store_true", help="precisión simple (mucho más rápida en GeForce)")
     a = p.parse_args()
-    return a, Config(minutos=a.minutos, bomba_min=a.bomba_min, dx=a.dx, largo=a.largo, ancho=a.ancho,
-                     nivel=a.nivel, q_max_lh=a.caudal_lh, h_max_m=a.hmax, salida_mm=a.salida_mm,
+    return a, Config(minutos=a.minutos, bomba_min=a.bomba_min, dx=a.dx, forma=a.forma, diametro=a.diametro,
+                     largo=a.largo, ancho=a.ancho, nivel=a.nivel, q_max_lh=a.caudal_lh, h_max_m=a.hmax, salida_mm=a.salida_mm,
                      boquilla_mm=a.boquilla_mm, angulo_tubo=a.angulo,
                      pos_bomba=tuple(a.pos_bomba) if a.pos_bomba else None, azimut=a.azimut, elevacion=a.elevacion, lugar_dosis=a.dosis, dosis_ml=a.dosis_ml, precalentar_s=a.precalentar,
                      c_nu=a.c_nu)
@@ -73,7 +76,7 @@ def resumir(cfg, sim, serie):
     lo, hi, cov = (np.array(serie[k]) for k in ("c_min", "c_max", "cov"))
     nombres = list(cfg.sondas())
     sup, casa = (np.array(serie[n]) / sim.c_final for n in nombres[:2])
-    vol = sim.nx * sim.ny * sim.nz * sim.vol_celda
+    vol = sim.volumen_m3
     r = {
         "volumen_m3": vol,
         "malla": [sim.nx, sim.ny, sim.nz],
@@ -92,6 +95,10 @@ def resumir(cfg, sim, serie):
         "tiras_9c_mg_l": {},
         "pasos": sim.pasos,
     }
+    if cfg.redonda:
+        r["forma"] = "redonda"
+        r["diametro_m"] = cfg.diametro
+        r["volumen_geometrico_m3"] = cfg.volumen_m3
     for m in MINUTOS_9C:
         if m <= t[-1] + 1e-9:
             i = int(np.argmin(np.abs(t - m)))
@@ -105,8 +112,12 @@ def _fmt_t(x, fin):
 
 def imprimir(cfg, r):
     print()
-    print(f"Cisterna {cfg.largo:.2f} x {cfg.ancho:.2f} x {cfg.nivel:.2f} m = {r['volumen_m3']:.2f} m3"
-          f"   malla {r['malla'][0]}x{r['malla'][1]}x{r['malla'][2]}")
+    malla = f"   malla {r['malla'][0]}x{r['malla'][1]}x{r['malla'][2]}"
+    if cfg.redonda:
+        print(f"Cisterna redonda de {cfg.diametro:.2f} m de diámetro x {cfg.nivel:.2f} m = "
+              f"{r['volumen_geometrico_m3']:.2f} m3 ({r['volumen_m3']:.2f} m3 en celdas de agua)" + malla)
+    else:
+        print(f"Cisterna {cfg.largo:.2f} x {cfg.ancho:.2f} x {cfg.nivel:.2f} m = {r['volumen_m3']:.2f} m3" + malla)
     print(f"Bomba: {r['q_lh']:.0f} L/h por boquilla de {cfg.boquilla_mm:.0f} mm, u = {r['u_boquilla_ms']:.2f} m/s,"
           f" M = {r['m_m4s2']:.2e} m4/s2")
     print(f"Dosis: {cfg.dosis_ml:.0f} mL de Cloralex en '{cfg.lugar_dosis}' -> {r['c_final_mg_l']:.2f} mg/L "

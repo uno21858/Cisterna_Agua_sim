@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -9,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Circle
 
 from .solver import a_numpy
 
@@ -19,6 +22,7 @@ TINTA_2 = "#52514e"
 TENUE = "#c3c2b7"
 FONDO = "#fcfcfb"
 BANDA = "#e4e3df"
+MURO = "#d6d4cc"
 AZUL = LinearSegmentedColormap.from_list(
     "azul", ["#f4f8fd", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"])
 
@@ -75,6 +79,47 @@ def _marca(ax, x, y, texto, color=TINTA):
     ax.annotate(texto, (x, y), xytext=(6, 6), textcoords="offset points", fontsize=8, color=TINTA)
 
 
+def _planta(sim, a):
+    """Campo de planta (nx, ny) listo para pcolormesh; en la redonda, sin lo que queda fuera del agua."""
+    a = np.asarray(a).T
+    return np.ma.masked_where(a_numpy(sim.agua[:, :, 0]).T == 0, a) if sim.redonda else a
+
+
+def _ejes_planta(ax, sim):
+    cfg = sim.cfg
+    ax.set_xlim(0, cfg.largo)
+    ax.set_ylim(0, cfg.ancho)
+    ax.set_aspect("equal")
+    if sim.redonda:
+        ax.set_facecolor(MURO)
+        ax.grid(False)
+        ax.add_patch(Circle((cfg.largo / 2, cfg.ancho / 2), cfg.diametro / 2, fill=False, ec=TINTA_2, lw=1.5,
+                            zorder=4))
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
+    else:
+        ax.set_xlabel("largo (m)")
+        ax.set_ylabel("ancho (m)")
+
+
+def _peso_seccion(sim):
+    """Fracción de agua que ve la interpolación en el corte; en la pared redonda baja de 1."""
+    solo_agua = copy.copy(sim)
+    solo_agua.c = sim.agua
+    return solo_agua.seccion_chorro("c")[2]
+
+
+def _seccion_c(sim, sec, peso):
+    """Cloro del corte sin el halo de ceros de las celdas secas que toca la interpolación."""
+    if not sim.redonda:
+        return sec
+    return np.ma.masked_where(peso < 0.05, sec / np.maximum(peso, 0.05))
+
+
+def _titulo_corte(sim, texto):
+    return texto + (" (cuerda del círculo)" if sim.redonda else "")
+
+
 def graficar_flujo(sim, ruta):
     """Velocidad promedio de los últimos minutos con la bomba andando: corte y planta."""
     cfg = sim.cfg
@@ -95,17 +140,17 @@ def graficar_flujo(sim, ruta):
     ax1.set_aspect("equal")
     ax1.set_xlabel("m a lo largo del chorro (en planta)")
     ax1.set_ylabel("altura sobre el fondo (m)")
-    ax1.set_title("Corte vertical por el plano del chorro", loc="left")
+    ax1.set_title(_titulo_corte(sim, "Corte vertical por el plano del chorro"), loc="left")
     fig.colorbar(im, ax=ax1, label="velocidad (cm/s)", shrink=0.9, pad=0.01)
 
     uc, vc, wc = (a_numpy(q) for q in sim.velocidad_centros())
     k = sim.indice_z(cfg.pozo[2])
     x = (np.arange(sim.nx) + 0.5) * sim.dx
     y = (np.arange(sim.ny) + 0.5) * sim.dy
-    U, V = uc[:, :, k].T, vc[:, :, k].T
+    U, V = _planta(sim, uc[:, :, k]), _planta(sim, vc[:, :, k])
     spd = np.hypot(U, V)
-    im2 = ax2.pcolormesh(x, y, spd * 100, cmap=AZUL, vmin=0, vmax=max(np.percentile(spd, 99), 1e-4) * 100,
-                         shading="auto")
+    im2 = ax2.pcolormesh(x, y, spd * 100, cmap=AZUL, vmin=0,
+                         vmax=max(np.percentile(np.ma.compressed(spd), 99), 1e-4) * 100, shading="auto")
     ax2.streamplot(x, y, U, V, color=TINTA_2, density=1.2, linewidth=0.7, arrowsize=0.8)
     bx, by, bz = cfg.pos_bomba_xyz()
     d = cfg.dir_chorro()
@@ -114,11 +159,7 @@ def graficar_flujo(sim, ruta):
     _marca(ax2, bx, by, "bomba de mezcla", SERIES[1])
     _marca(ax2, cfg.pozo[0], cfg.pozo[1], "bomba de pozo", TINTA_2)
     _marca(ax2, cfg.punto_dosis()[0], cfg.punto_dosis()[1], "dosis", SERIES[0])
-    ax2.set_xlim(0, cfg.largo)
-    ax2.set_ylim(0, cfg.ancho)
-    ax2.set_aspect("equal")
-    ax2.set_xlabel("largo (m)")
-    ax2.set_ylabel("ancho (m)")
+    _ejes_planta(ax2, sim)
     ax2.set_title(f"Planta a {(k + 0.5) * sim.dz:.2f} m (altura de la rejilla del pozo)", loc="left")
     fig.colorbar(im2, ax=ax2, label="velocidad horizontal (cm/s)", shrink=0.9, pad=0.01)
     fig.suptitle("Flujo promedio con la bomba andando", x=0.01, ha="left", fontsize=12)
@@ -132,18 +173,19 @@ def animar(sim, cuadros, ruta, fps=6):
     x = (np.arange(sim.nx) + 0.5) * sim.dx
     y = (np.arange(sim.ny) + 0.5) * sim.dy
     vmax = 2.0 * sim.c_final
+    peso = _peso_seccion(sim) if sim.redonda else None
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4.2), gridspec_kw={"width_ratios": [1.45, 1]},
                                    layout="constrained")
-    im1 = ax1.pcolormesh(s, z, cuadros[0]["seccion"], cmap=AZUL, vmin=0, vmax=vmax, shading="auto")
-    im2 = ax2.pcolormesh(x, y, cuadros[0]["planta"].T, cmap=AZUL, vmin=0, vmax=vmax, shading="auto")
+    im1 = ax1.pcolormesh(s, z, _seccion_c(sim, cuadros[0]["seccion"], peso), cmap=AZUL, vmin=0, vmax=vmax,
+                         shading="auto")
+    im2 = ax2.pcolormesh(x, y, _planta(sim, cuadros[0]["planta"]), cmap=AZUL, vmin=0, vmax=vmax, shading="auto")
     for ax in (ax1, ax2):
         ax.set_aspect("equal")
         ax.grid(False)
     ax1.set_xlabel("m a lo largo del chorro")
     ax1.set_ylabel("altura (m)")
-    ax1.set_title("Corte por el chorro", loc="left")
-    ax2.set_xlabel("largo (m)")
-    ax2.set_ylabel("ancho (m)")
+    ax1.set_title(_titulo_corte(sim, "Corte por el chorro"), loc="left")
+    _ejes_planta(ax2, sim)
     ax2.set_title("Planta, promedio de toda la columna de agua", loc="left")
     _marca(ax1, 0, cfg.pos_bomba_xyz()[2], "bomba", SERIES[1])
     bx, by, bz = cfg.pos_bomba_xyz()
@@ -155,8 +197,8 @@ def animar(sim, cuadros, ruta, fps=6):
 
     def dibuja(i):
         q = cuadros[i]
-        im1.set_array(q["seccion"].ravel())
-        im2.set_array(q["planta"].T.ravel())
+        im1.set_array(_seccion_c(sim, q["seccion"], peso).ravel())
+        im2.set_array(_planta(sim, q["planta"]).ravel())
         titulo.set_text(f"t = {q['t_min']:4.0f} min   CoV = {q['cov']:.2f}")
         return im1, im2, titulo
 

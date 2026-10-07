@@ -72,7 +72,7 @@ def corre_caso(dx, c_nu, elevacion, gpu, f32, minutos):
     seg = time.time() - t0
     t = np.array(serie["t_min"])
     cov, lo, hi = (np.array(serie[k]) for k in ("cov", "c_min", "c_max"))
-    vol = sim.nx * sim.ny * sim.nz * sim.vol_celda
+    vol = sim.volumen_m3
     masa_esperada = cfg.dosis_ml * cfg.cloralex_mg_ml
     r = {
         "clave": clave(dx, c_nu, elevacion, f32, minutos),
