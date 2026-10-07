@@ -126,8 +126,9 @@ con la configuración por defecto y el flujo desarrollándose. Debe:
    elegida o en 3D proyectadas.
 2. **Vista lateral** (corte vertical, a escala en ambos ejes): elegir corte a lo largo
    (plano y = bomba) o por el plano del chorro. Dibujar nivel del agua, fondo, tapa y boca,
-   bomba de pozo colgando con su rejilla a 45 cm, flotador, mástil diagonal, bomba de
-   mezcla, sonda ORP, cotas en cm. Mismo fondo y partículas.
+   bomba de pozo colgando con su rejilla a 45 cm, flotador, mástil diagonal (o el tubo vertical con
+   `angulo_tubo` 90, ver "Visor de la redonda"), bomba de mezcla, sonda ORP, cotas en cm. Mismo fondo y
+   partículas.
 3. **Controles**: arrastrar la bomba de mezcla en la vista superior; altura (slider);
    azimut (arrastrar la punta de la flecha o slider); elevación (-90 a +90); caudal real
    (L/h) y boquilla (mm); nivel del agua; lugar de la dosis (llenado, mástil, o clic en la
@@ -307,3 +308,39 @@ Rendimiento en CPU con numpy (un hilo, 30 pasos antes de medir y 150 medidos con
 De los 27.1 ms, 3.4 son la presión (0.40 ms por aplicación del precondicionador); el resto escala con las celdas
 de la caja, que en Python sí se calculan aunque estén secas. Los productos punto van con `(a * b).sum()`: el
 `ddot` de OpenBLAS se reparte en hilos con 13 mil celdas y subía el paso a 33.5 ms.
+
+### Visor de la redonda (punto 10)
+
+En `web/app.js`; con `forma = "rectangular"` y el mástil a 60° los lienzos salen iguales que antes, píxel por píxel,
+salvo un halo claro bajo la línea punteada de la boca para que se vea sobre el cloro oscuro (comparado en 16 vistas,
+planta y corte, a 1280 y 400 px). Huecos del punto 10 y cómo se resolvieron:
+
+- **Muro**: un anillo de `MURO` (15 cm, supuesto de dibujo, como en la rectangular) alrededor del círculo; más afuera
+  es papel, porque la caja de cálculo no existe físicamente. El cloro se recorta al círculo verdadero y cada columna
+  seca toma el cloro de la columna de agua más cercana (búsqueda en anchura sobre la máscara `agua`, que el worker
+  manda con cada instantánea junto con `redonda`): sin eso, el suavizado mezcla los ceros del muro y deja un borde
+  claro que no es real. La rapidez sí usa los ceros: velocidad 0 en la pared es lo físico.
+- **Corte**: dos opciones, "Cuerda por la bomba" (y = bomba, paredes en `cx ± sqrt(R² - (y - cy)²)`) y el plano del
+  chorro recortado al círculo (la misma cuerda que `seccionChorro`). Una cuerda que no pasa por el centro corta el
+  muro en diagonal: se dibuja con su grueso aparente `sqrt((R + MURO)² - e²) - sqrt(R² - e²)` (e: distancia de la
+  cuerda al centro). La cota de abajo dice `Ø 326` por el centro y `305 de cuerda` fuera de él.
+- **Cotas de la planta**: el diámetro abajo (líneas de referencia desde las tangentes, fuera del muro) y la distancia
+  de la bomba al muro por el radio, en lugar de las distancias a las dos paredes más cercanas. Con la bomba al centro
+  la línea va perpendicular al chorro, del lado contrario al pozo y al flotador.
+- **Chorro**: el rayo pega en el cilindro (`|p + t d - centro| = R` en planta), en el fondo o en la superficie.
+- **Partículas y flechas**: se siembran solo dentro del círculo y se resiembran al salir de él; las del corte, dentro
+  de la cuerda y su franja de ±25 cm. El tocado de la dosis fuera del agua no cuenta.
+- **Tubo vertical** (`angulo_tubo` 90, en cualquier forma): de la tapa (la losa) al piso con un pie, sin travesaño;
+  en la planta, un círculo. La bomba se dibuja amarrada a un lado del tubo, de pie (desde arriba se ve la toma: un
+  círculo), del lado del chorro y con dos cinchos en el corte; la flecha sale de ahí. La sonda ORP "mirando de lado" se
+  dibuja perpendicular al chorro, del lado contrario al pozo y al flotador (el lado es supuesto): en un corte que
+  la ve de frente queda sobre el tubo. En la planta la sonda de superficie va del lado contrario al chorro para no
+  tapar el tubo. Todo eso es dibujo: el motor pone bomba y sondas en el eje del tubo, a menos de una celda; las cotas
+  de altura y el rayo usan el punto del motor. Con otro ángulo sigue el mástil colgado del travesaño de siempre.
+- **Editar cisterna**: forma (redonda o rectangular) y diámetro; `largo` y `ancho` se guardan para volver a la
+  rectangular. Al arrastrar o al cambiar forma o medidas, la boca queda a `R - 0.42` del centro o menos (su cuadro de
+  60 cm no sale del círculo) y el pozo, el flotador, la bomba libre y el punto tocado de la dosis a `R - 0.10` o
+  menos (media celda de la malla de 20 cm, la más gruesa del menú, para que ningún cambio de malla los deje fuera;
+  8 mm de holgura para el redondeo al cm). En la rectangular los márgenes son los de antes (30 y 5 cm); el recorte
+  ahora también mueve la bomba libre y la dosis tocada, que antes dejaban la config rechazada.
+- **Volumen y fórmula**: el geométrico, `π R² nivel` (10.0 m³ con los defaults), como en la cartela.

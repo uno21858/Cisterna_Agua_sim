@@ -1537,10 +1537,12 @@ function overlayCorte(v) {
     const ladoB = dh >= 0 ? -1 : 1;
     const xsDe = (x0, ds, primero, xRef0 = x0, hueco = 0) => ds.flatMap((d) => [primero, -primero]
       .map((s) => [x0 + s * (d + hueco), s, xRef0 + s * hueco]));
-    const xs = sondaXY[0];
-    cotaVMovil(R, String(cm(pb[2])), Y(pb[2]), Y(0), xb, xsDe(xb, [18, 32, 46, 60], ladoB), T.acento, 3);
-    cotaVMovil(R, String(cm(cfgV.z_orp)), Y(cfgV.z_orp), Y(0), xs, xsDe(xs, [14, 28, 42, 56], xs >= xb ? 1 : -1), T.s[2], 2);
-    cotaVMovil(R, String(cm(zr)), Y(zr), Y(0), X(pp), xsDe(X(pp), [12, 26, 40], -1, X(pp), r), T.tinta2, 1);
+    // Con el tubo vertical las tres alturas quedan juntas (el pozo a 30 cm): prueban también más lejos.
+    const xs = sondaXY[0], mas = vertical ? [14, 28] : [];
+    const lejosDe = (ds) => [...ds, ...mas.map((q) => ds.at(-1) + q)];
+    cotaVMovil(R, String(cm(pb[2])), Y(pb[2]), Y(0), xb, xsDe(xb, lejosDe([18, 32, 46, 60]), ladoB), T.acento, 3);
+    cotaVMovil(R, String(cm(cfgV.z_orp)), Y(cfgV.z_orp), Y(0), xs, xsDe(xs, lejosDe([14, 28, 42, 56]), xs >= xb ? 1 : -1), T.s[2], 2);
+    cotaVMovil(R, String(cm(zr)), Y(zr), Y(0), X(pp), xsDe(X(pp), lejosDe([12, 26, 40]), -1, X(pp), r), T.tinta2, 1);
     const txtLargo = est.corte === "chorro" ? `${cm(h1 - h0)} por el chorro`
       : !k.redonda ? String(cm(h1 - h0)) : pc.e < 0.005 ? `Ø ${cm(h1 - h0)}` : `${cm(h1 - h0)} de cuerda`;
     cotaH(c, R, X(h0), X(h1), Y(-MURO) + 18, txtLargo, T.tinta2, Y(-MURO) + 2);
