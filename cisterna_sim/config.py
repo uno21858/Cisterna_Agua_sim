@@ -157,7 +157,7 @@ class Config:
 
     def validar(self) -> None:
         errores = []
-        planta = ("diametro",) if self.redonda else ("largo", "ancho")
+        planta = ("diametro",) if self.redonda else ("largo", "ancho", "diametro")
         for nombre in planta + ("nivel", "dx", "q_max_lh", "h_max_m", "salida_mm", "boquilla_mm",
                                 "minutos", "dosis_ml"):
             if not getattr(self, nombre) > 0:

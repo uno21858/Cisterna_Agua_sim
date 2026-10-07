@@ -229,6 +229,7 @@ class Cisterna:
             pre[0, 0, 0] = 0.0
             self._inv_menos_lam = xp.asarray(pre, dtype=dt)
             self.p = xp.zeros((nx, ny, nz), dtype=dt)  # arranque del siguiente paso
+            self.tol_cg = TOL_CG[np.dtype(dt)]
             self.iter_cg = 0
             self._avisado_cg = False
 
@@ -390,7 +391,7 @@ class Cisterna:
     def _presion(self, b):
         """Gradiente conjugado precondicionado para lap_agua(p) = b, arrancando de la p anterior."""
         xp, p = self.xp, self.p
-        lim = TOL_CG[np.dtype(self.dtype)] * float(xp.abs(b).max())
+        lim = self.tol_cg * float(xp.abs(b).max())
         if lim == 0:
             p[:] = 0
             self.iter_cg = 0
@@ -429,7 +430,11 @@ class Cisterna:
         return self._div(self.u, self.v, self.w)
 
     def paso_flujo(self, dt, bomba_encendida=True):
-        self.nu_c = NU_AGUA + self._nu_turbulenta() + (self.nu_fondo if bomba_encendida else 0.0)
+        fondo = self.nu_fondo if bomba_encendida else 0.0
+        if self.redonda:  # fuera del agua solo la molecular: ninguna cara abierta la usa y no limita el dt
+            self.nu_c = NU_AGUA + (self._nu_turbulenta() + fondo) * self.agua
+        else:
+            self.nu_c = NU_AGUA + self._nu_turbulenta() + fondo
         u, v, w = self.u, self.v, self.w
         lap_u = _d2(u, 0, self.dx, 0, 0) + _d2(u, 1, self.dy, -1, -1) + _d2(u, 2, self.dz, -1, 1)
         lap_v = _d2(v, 0, self.dx, -1, -1) + _d2(v, 1, self.dy, 0, 0) + _d2(v, 2, self.dz, -1, 1)

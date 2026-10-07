@@ -71,6 +71,8 @@ def test_flujo_sin_divergencia_y_cloro_conservado():
         assert (a[m == 0] == 0).all()
     assert sim.energia_cinetica() > 0
     assert 0 < sim.iter_cg < solver.ITER_MAX_CG
+    assert (sim.nu_c[sim.agua == 0] == solver.NU_AGUA).all()  # fuera del agua no limita el dt
+    assert float(sim.nu_c.max()) > 10 * solver.NU_AGUA
 
 
 def test_concentracion_uniforme_se_queda_uniforme():
@@ -161,6 +163,8 @@ def test_validar_acepta_puntos_junto_a_la_pared():
            llenado=(1.0, 0.8, 1.1)).validar()
     with pytest.raises(ValueError):
         Config(forma="cuadrada").validar()
+    with pytest.raises(ValueError):
+        Config(diametro=-1.0).validar()  # el diámetro se valida aunque la planta sea rectangular
 
 
 def test_seccion_por_la_cuerda():
@@ -182,6 +186,15 @@ def test_correr_usa_solo_el_agua():
     assert serie["cov"][-1] == pytest.approx(float(rel.std()), rel=1e-12)
     assert serie["c_min"][-1] == pytest.approx(float(rel.min()), rel=1e-12)
     assert sim.masa_cloro_mg() == pytest.approx(masa, rel=1e-10)
+
+
+def test_tolerancia_estricta_para_la_paridad():
+    sim = Cisterna(_cfg())
+    sim.tol_cg = 1e-12
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _corre(sim, 20, con_cloro=False)
+    assert float(np.abs(sim.divergencia()[sim.agua > 0]).max()) * sim.dx <= 1e-10 * _vmax(sim)
 
 
 def test_aviso_una_vez_si_la_presion_no_converge(monkeypatch):
