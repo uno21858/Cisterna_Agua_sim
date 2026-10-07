@@ -10,6 +10,7 @@ Todos los casos fijan su geometría (RECT o RED), así no cambian si cambian los
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import sys
@@ -36,7 +37,8 @@ RECT = {"forma": "rectangular", "largo": 3.40, "ancho": 2.45, "nivel": 1.20, "bo
 # La cisterna de Erick: boca al centro, tubo vertical, pozo a 30 cm y llenado junto al pozo.
 D = 3.26
 RED = {"forma": "redonda", "diametro": D, "nivel": 1.20, "boca": [1.63, 1.63], "angulo_tubo": 90.0,
-       "z_bomba": 0.50, "z_orp": 0.20, "pozo": [1.33, 1.63, 0.45], "llenado": [1.33, 1.88, 1.10]}
+       "z_bomba": 0.50, "z_orp": 0.20, "azimut": 0.0, "elevacion": 0.0,
+       "pozo": [1.33, 1.63, 0.45], "llenado": [1.33, 1.88, 1.10]}
 
 MUESTRAS_RECT = ((0.33, 1.71, 0.12), (3.39, 0.01, 1.19), (-1.0, 5.0, 0.5))
 # centro, junto a la pared (adentro y a menos de una celda), esquina de la caja (seca) y fuera de la caja
@@ -107,10 +109,12 @@ GEOMETRIAS = [
     {**RECT, "boca": [2.6, 1.9], "angulo_tubo": 45.0, "z_bomba": 0.6, "lugar_dosis": "mastil"},
     {**RECT, "nivel": 1.0, "pos_bomba": [2.3, 0.7, 0.35], "azimut": 140.0, "elevacion": -25.0},
     {**RECT, "azimut": 30.0, "elevacion": -88.0, "nivel": 0.9},
-    {**RED, "azimut": 0.0, "elevacion": 0.0},
-    {**RED, "boca": [1.20, 1.00], "angulo_tubo": 60.0},
-    {**RED, "boca": [2.4, 2.0], "angulo_tubo": 45.0, "z_bomba": 0.6, "lugar_dosis": "mastil"},
-    {**RED, "boca": [D / 2 + 0.0005, D / 2], "angulo_tubo": 70.0},  # boca a menos de 1 mm del centro
+    RED,
+    # mástil inclinado con el chorro por el tubo: hacia el centro (el lado opuesto)
+    {**RED, "boca": [1.20, 1.00], "angulo_tubo": 60.0, "azimut": None, "elevacion": None},
+    {**RED, "boca": [2.4, 2.0], "angulo_tubo": 45.0, "z_bomba": 0.6, "lugar_dosis": "mastil", "azimut": None,
+     "elevacion": None},
+    {**RED, "boca": [D / 2 + 0.0005, D / 2], "angulo_tubo": 70.0, "azimut": None, "elevacion": None},  # a < 1 mm del centro
 ]
 
 BOMBAS = [
@@ -223,6 +227,9 @@ def main():
         "validos": VALIDOS,
         "geometrias": [geometria(kw) for kw in GEOMETRIAS],
         "bombas": bombas,
+        # valores por defecto de los campos (sin __post_init__): DEFAULTS de solver.js debe dar lo mismo
+        "defaults": {f.name: list(f.default) if isinstance(f.default, tuple) else f.default
+                     for f in dataclasses.fields(Config)},
     }
     ruta = Path(__file__).with_name("ref_py.json")
     ruta.write_text(json.dumps(ref))

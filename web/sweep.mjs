@@ -54,8 +54,10 @@ const rad = (g) => (g * Math.PI) / 180;
 const r3 = (x) => (x == null || !Number.isFinite(x) ? x : Math.round(x * 1000) / 1000);
 const r4 = (x) => Number(x.toPrecision(4));
 
+// Plantas rectangulares con el mástil del doc a 60 grados (fijos: los defaults ya son la cisterna redonda).
 function geoBase(g) {
-  return { largo: g.largo, ancho: g.ancho, boca: g.boca, pozo: g.pozo, llenado: g.llenado };
+  return { forma: "rectangular", angulo_tubo: 60, largo: g.largo, ancho: g.ancho, boca: g.boca, pozo: g.pozo,
+    llenado: g.llenado };
 }
 
 // Posición en planta de la bomba: sobre el mástil del doc, o colgada en otro punto alcanzable

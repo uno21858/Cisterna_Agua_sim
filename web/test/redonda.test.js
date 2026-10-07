@@ -5,6 +5,12 @@ import test from "node:test";
 import { Cisterna, MAX_IT_PRESION, TOL_PRESION, configura, geometria, validar } from "../solver.js";
 
 const D = 3.26, R = D / 2;
+// Mástil inclinado con el chorro por el tubo y planta rectangular de antes (para comparar).
+const MASTIL = Object.freeze({ angulo_tubo: 60, azimut: null, elevacion: null });
+const RECT = Object.freeze({
+  forma: "rectangular", largo: 3.40, ancho: 2.45, boca: [1.20, 1.00], ...MASTIL,
+  pozo: [0.90, 1.00, 0.45], llenado: [0.25, 1.20, 1.10],
+});
 const red = (kw = {}) => new Cisterna({ forma: "redonda", diametro: D, dx: 0.2, ...kw }); // 16x16x6
 
 function corre(sim, pasos, opts) {
@@ -92,14 +98,14 @@ test("redonda: largo = ancho = diámetro, máscara de la especificación y volú
   assert.ok(Math.abs(sim.volumenAgua / g.volumen_m3 - 1) < 0.05);
   const fino = new Cisterna({ forma: "redonda", diametro: D, dx: 0.1 });
   assert.ok(Math.abs(fino.volumenAgua / g.volumen_m3 - 1) < 0.01);
-  const rect = new Cisterna({ dx: 0.2 });
+  const rect = new Cisterna({ ...RECT, dx: 0.2 });
   assert.equal(rect.nAgua, rect.nx * rect.ny * rect.nz);
   assert.equal(rect.redonda, false);
   assert.equal(rect.p, null);
 });
 
 test("redonda: rumbo hacia el centro (el lado opuesto sustituye a la esquina opuesta)", () => {
-  const base = { forma: "redonda", diametro: D };
+  const base = { forma: "redonda", diametro: D, ...MASTIL };
   for (const boca of [[1.0, 2.0], [2.5, 1.2], [1.2, 1.0]]) {
     const g = geometria({ ...base, boca });
     const hx = R - boca[0], hy = R - boca[1], n = Math.hypot(hx, hy);
@@ -133,7 +139,7 @@ test("redonda: validar rechaza puntos fuera del círculo y acepta los de adentro
   }
   // esquina de la caja: adentro de la rectangular de 3.26 x 3.26, afuera del círculo
   assert.throws(() => validar({ ...base, pozo: [0.25, 0.25, 0.45] }), /pozo/);
-  validar({ largo: D, ancho: D, pozo: [0.25, 0.25, 0.45] });
+  validar({ ...RECT, largo: D, ancho: D, pozo: [0.25, 0.25, 0.45] });
   // el llenado solo cuenta con consumo
   validar({ ...base, lugar_dosis: "mastil", llenado: [0.2, 0.2, 1.1] });
   // la boca (sonda de superficie) y la sonda ORP sobre el tubo
@@ -371,7 +377,7 @@ test("redonda: copiaEstado solo entre cisternas de la misma forma", () => {
   assert.ok(b.copiaEstado(a));
   assert.deepEqual(Array.from(b.p), Array.from(a.p));
   assert.equal(b.cFinal, a.cFinal);
-  const rect = new Cisterna({ dx: 0.2, largo: D, ancho: D });
+  const rect = new Cisterna({ ...RECT, dx: 0.2, largo: D, ancho: D });
   assert.deepEqual([rect.nx, rect.ny, rect.nz], [a.nx, a.ny, a.nz]);
   assert.equal(rect.copiaEstado(a), false);
   assert.equal(a.copiaEstado(rect), false);

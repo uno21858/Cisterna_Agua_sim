@@ -7,9 +7,17 @@ from cisterna_sim.bomba import G, punto_operacion, tiempo_mezcla_s
 from cisterna_sim.config import Config
 from cisterna_sim.solver import Cisterna
 
+# Planta rectangular con el mástil diagonal del doc (los defaults de antes de la cisterna redonda).
+RECT = dict(forma="rectangular", largo=3.40, ancho=2.45, boca=(1.20, 1.00), angulo_tubo=60.0, azimut=None,
+            elevacion=None, pozo=(0.90, 1.00, 0.45), llenado=(0.25, 1.20, 1.10))
+
+
+def _rect(**kw):
+    return Config(**{**RECT, **kw})
+
 
 def _sim(**kw):
-    return Cisterna(Config(dx=0.2, **kw))  # malla 17x12x6: rápida
+    return Cisterna(_rect(dx=0.2, **kw))  # malla 17x12x6: rápida
 
 
 def _corre(sim, pasos, con_cloro=True):
@@ -84,9 +92,9 @@ def test_reduccion_casi_no_ayuda_y_manguera_ancha_empeora():
 
 
 def test_chorro_configurable():
-    cfg = Config(azimut=90.0, elevacion=0.0, pos_bomba=(1.0, 1.0, 0.6))
+    cfg = _rect(azimut=90.0, elevacion=0.0, pos_bomba=(1.0, 1.0, 0.6))
     assert np.allclose(cfg.dir_chorro(), (0.0, 1.0, 0.0), atol=1e-12)
-    sim = Cisterna(Config(dx=0.2, azimut=90.0, elevacion=0.0, pos_bomba=(1.0, 1.0, 0.6)))
+    sim = _sim(azimut=90.0, elevacion=0.0, pos_bomba=(1.0, 1.0, 0.6))
     assert sim.f_v.sum() > 0 and abs(sim.f_u.sum()) < 1e-12 and abs(sim.f_w.sum()) < 1e-12
 
 
@@ -106,11 +114,11 @@ def test_chorro_configurable():
 ])
 def test_configuracion_invalida(kw):
     with pytest.raises(ValueError):
-        Config(**kw).validar()
+        _rect(**kw).validar()
 
 
 def test_geometria_del_mastil():
-    cfg = Config()
+    cfg = _rect()
     x, y, z = cfg.punto_tubo(cfg.z_bomba)
     bx, by = cfg.boca
     horizontal = math.hypot(x - bx, y - by)
@@ -121,7 +129,7 @@ def test_geometria_del_mastil():
 def test_precision_simple_da_lo_mismo_y_no_sube_a_doble():
     sims = {}
     for f32 in (False, True):
-        sim = Cisterna(Config(dx=0.2), f32=f32)
+        sim = Cisterna(_rect(dx=0.2), f32=f32)
         sim.dosifica(7500.0, sim.cfg.punto_dosis())
         for _ in range(40):
             sim.avanza(0.5)
@@ -134,5 +142,5 @@ def test_precision_simple_da_lo_mismo_y_no_sube_a_doble():
 
 
 def test_bomba_en_el_tope_y_nivel_bajo_con_malla_gruesa_son_validos():
-    Config(z_bomba=1.10).validar()  # 1.10 + 0.10 > 1.20 en punto flotante
-    Config(dx=0.2, nivel=0.65, z_bomba=0.40, pozo=(0.9, 1.0, 0.30)).validar()
+    _rect(z_bomba=1.10).validar()  # 1.10 + 0.10 > 1.20 en punto flotante
+    _rect(dx=0.2, nivel=0.65, z_bomba=0.40, pozo=(0.9, 1.0, 0.30)).validar()

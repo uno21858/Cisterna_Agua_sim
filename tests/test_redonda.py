@@ -28,7 +28,27 @@ def test_largo_y_ancho_son_el_diametro():
     cfg = Config(forma="redonda", diametro=3.0, largo=9.0, ancho=1.0)
     assert cfg.largo == cfg.ancho == 3.0
     assert cfg.volumen_m3 == pytest.approx(math.pi * 1.5**2 * cfg.nivel)
-    assert Config(diametro=5.0).largo == 3.40  # la rectangular ignora el diámetro
+    assert Config(forma="rectangular", diametro=5.0).largo == 3.40  # la rectangular ignora el diámetro
+
+
+def test_defaults_son_la_cisterna_de_erick():
+    cfg = Config()
+    cfg.validar()
+    assert cfg.forma == "redonda" and cfg.diametro == D and cfg.largo == cfg.ancho == D
+    assert cfg.volumen_m3 == pytest.approx(10.0, abs=0.02)
+    # tubo vertical bajo la boca: bomba a 50 cm y sonda ORP a 20 cm sobre el eje del tubo
+    bx, by = cfg.boca
+    assert np.allclose(cfg.pos_bomba_xyz(), (bx, by, 0.50), atol=1e-12)
+    assert np.allclose(cfg.sondas()["sonda ORP"], (bx, by, 0.20), atol=1e-12)
+    # chorro horizontal, lejos del pozo; pozo a 30 cm de la boca y el llenado junto al pozo
+    d = np.array(cfg.dir_chorro())
+    assert np.allclose(d, (1.0, 0.0, 0.0), atol=1e-15)
+    pozo = np.array(cfg.pozo)
+    assert d @ (pozo - np.array(cfg.pos_bomba_xyz())) < 0
+    assert math.hypot(pozo[0] - bx, pozo[1] - by) == pytest.approx(0.30)
+    assert math.hypot(cfg.llenado[0] - pozo[0], cfg.llenado[1] - pozo[1]) <= 0.30
+    assert cfg.punto_dosis() == pytest.approx((cfg.llenado[0], cfg.llenado[1], cfg.nivel - 0.10))
+    Config(dx=0.4).validar()  # cabe la malla más gruesa permitida (8.15 celdas)
 
 
 def test_mascara_y_caras_abiertas():

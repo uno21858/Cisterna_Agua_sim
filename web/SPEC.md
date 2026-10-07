@@ -28,13 +28,13 @@ Concentración de cloro en mg/L. Caudales de entrada en L/h o L/min según el no
 ## Config (mismos nombres que Python, snake_case)
 
 ```js
-export const DEFAULTS = {
-  forma: "rectangular", diametro: 3.26,   // diametro supuesto: 10 m3 a 1.20 m (ver "Cisterna redonda")
-  largo: 3.40, ancho: 2.45, nivel: 1.20, z_tapa: 1.35, dx: 0.10,
+export const DEFAULTS = {          // la cisterna de Erick; supuestos en "Defaults" abajo
+  forma: "redonda", diametro: 3.26,
+  largo: 3.40, ancho: 2.45, nivel: 1.20, z_tapa: 1.35, dx: 0.10,   // largo y ancho: solo en la rectangular
   q_max_lh: 800, h_max_m: 5, salida_mm: 8, boquilla_mm: 8, k_salida: 1.0,
-  boca: [1.20, 1.00], angulo_tubo: 60, z_bomba: 0.50, z_orp: 0.20,
-  pos_bomba: null, azimut: null, elevacion: null,
-  pozo: [0.90, 1.00, 0.45], llenado: [0.25, 1.20, 1.10],
+  boca: [1.63, 1.63], angulo_tubo: 90, z_bomba: 0.50, z_orp: 0.20,
+  pos_bomba: null, azimut: 0, elevacion: 0,
+  pozo: [1.33, 1.63, 0.45], llenado: [1.33, 1.88, 1.10],
   dosis_ml: 150, cloralex_mg_ml: 50, lugar_dosis: "llenado",   // "llenado" | "mastil" | [x,y,z]
   cfl: 0.4, cs: 0.17, c_nu: 0.02, sc_t: 0.7,
   // extensiones JS (no existen en Python):
@@ -152,8 +152,8 @@ Debe implementarse igual en `web/solver.js` y en `cisterna_sim/` (paridad < 1e-6
 referencia, con la presión resuelta a tolerancia estricta). Con `forma = "rectangular"` todo debe
 quedar bit a bit como hoy (las pruebas de referencia actuales no cambian).
 
-Config nueva: `forma` ("rectangular" | "redonda", por ahora default "rectangular"; el orquestador lo
-cambia al final) y `diametro` (m). Con "redonda": `largo = ancho = diametro` (se ignoran los que
+Config nueva: `forma` ("rectangular" | "redonda", default "redonda" desde el 7 oct, ver "Defaults") y
+`diametro` (m). Con "redonda": `largo = ancho = diametro` (se ignoran los que
 vengan), centro `(D/2, D/2)`, radio `R = D/2`.
 
 1. **Celdas de agua**: `fluido[i][j] = (xc - cx)² + (yc - cy)² <= R²` con `xc = (i + 0.5)·dx`,
@@ -234,6 +234,48 @@ De los 11 ms de la redonda, 6.4 son la presión y casi todo es la DCT del precon
 aplicación); aplicar `-A` cuesta 0.06 ms. Con la caja llena como máscara el gradiente conjugado converge en una
 iteración y da la proyección de la DCT directa a 3e-16 (el operador, el precondicionador y la corrección cuadran). Las caras y celdas secas no se calculan en advección, difusión y
 cloro. Cero asignaciones por paso: todos los vectores del gradiente conjugado están prealocados.
+
+### Defaults: la cisterna de Erick (7 oct)
+
+Iguales en `cisterna_sim/config.py` y en `DEFAULTS` de `web/solver.js` (la prueba "DEFAULTS iguales a los de
+cisterna_sim/config.py" compara los valores por defecto de los campos de la dataclass contra `DEFAULTS`).
+
+| parámetro | valor | origen |
+|---|---|---|
+| `forma`, `nivel` | "redonda", 1.20 m | dicho por Erick (redonda) y documento (nivel del flotador) |
+| `diametro` | 3.26 m | supuesto: el cilindro de 10 m3 a 1.20 m (π 1.63² 1.20 = 10.0) |
+| `boca` | (1.63, 1.63), al centro | supuesto |
+| `angulo_tubo`, `z_bomba`, `z_orp` | 90 (tubo vertical bajo la boca), 0.50 m, 0.20 m | propuesta de Erick |
+| `azimut`, `elevacion` | 0 (hacia +x, lejos del pozo), 0 (chorro horizontal) | horizontal: Erick; hacia +x: supuesto |
+| `pozo` | (1.33, 1.63, 0.45) | supuesto: 30 cm de la boca del lado -x; rejilla a 45 cm (documento) |
+| `llenado` | (1.33, 1.88, 1.10) | junto al pozo (Erick); el lado +y es supuesto |
+
+- `azimut` o `elevacion` en `null` siguen queriendo decir "a lo largo del tubo"; con el tubo vertical eso es un
+  chorro hacia el fondo (elevación -90). Para el diseño del documento hay que pasar `forma: "rectangular"`,
+  `angulo_tubo: 60`, `azimut: null`, `elevacion: null` y la geometría vieja (`largo` 3.40, `ancho` 2.45, `boca`
+  (1.20, 1.00), `pozo` (0.90, 1.00, 0.45), `llenado` (0.25, 1.20, 1.10)).
+- Con la boca al centro, `rumbo()` es (1, 0) (punto 9). Con el tubo vertical el rumbo no mueve la bomba ni la
+  sonda ORP; solo cuenta si el chorro sigue el tubo (`null`) o es casi vertical (`plano_chorro`).
+- La boquilla queda a 30 cm de la rejilla del pozo (0.50 contra 0.45 de altura): la advertencia del visor de
+  "< 0.5 m de la rejilla" sale con los defaults. Es la geometría supuesta, no un error.
+- Los casos de `web/test/gen_ref.py`, las pruebas rectangulares (`tests/test_solver.py`,
+  `web/test/solver.test.js`), `web/sweep.mjs` y `web/propuesta.mjs` fijan su forma y geometría, así que dan lo
+  mismo que antes del cambio: los campos de referencia rectangulares salieron idénticos bit a bit, y las 12000
+  configuraciones del barrido y las 324 de la propuesta salen iguales (`configura`) con el solver viejo y el nuevo.
+
+### Paridad Python contra JS de la redonda (prueba formal)
+
+Caso "redonda" de `web/test/gen_ref.py`: diámetro 3.26, dx 0.2 (malla 16x16x6, 1248 celdas de agua), boca al
+centro con tubo vertical, bomba en (1.69, 1.64, 0.50) con chorro horizontal a azimut 10 (sin simetría de espejo),
+dosis en el llenado, 80 pasos de 0.5 s con la bomba apagada desde el paso 60 y la presión a tolerancia 1e-12 en
+los dos lados (`sim.tol_cg` y `sim.tolPresion`, guardada en el caso como `tol_presion`).
+`web/test/referencia.test.js` lo compara con error relativo < 1e-6 en u, v, w, c, estadísticas, sondas, muestras
+junto a la pared y fuera del agua, sección del chorro, `dtFlujo` y `dtCloro`. Resultado: error relativo máximo
+1.35e-15 (c; u, v, w <= 9.3e-16) y el mismo número de iteraciones del gradiente conjugado en cada paso (897 en
+total); la prueba exige que el total no difiera más de 2 %. `validar()` se compara con 25 configuraciones que los
+dos rechazan (12 rectangulares y 13 redondas) y 7 que los dos aceptan (en los límites: medio dx de la pared,
+`diametro/dx` = 8.15 y 8 exacto, llenado fuera del círculo cuando no es la dosis). No hizo falta cambiar ni el
+solver de Python ni el de JS.
 
 ### Lado Python (`cisterna_sim/`)
 

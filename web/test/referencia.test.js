@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { Cisterna, geometria, puntoOperacion, tiempoMezclaS, validar } from "../solver.js";
+import { Cisterna, DEFAULTS, geometria, puntoOperacion, tiempoMezclaS, validar } from "../solver.js";
 
 const REF = JSON.parse(readFileSync(new URL("./ref_py.json", import.meta.url), "utf8"));
 const TOL = 1e-6;
@@ -102,6 +102,16 @@ test("validar rechaza y acepta lo mismo que Python", () => {
   for (const kw of REF.validos) validar(kw);
   for (const caso of Object.values(REF.casos)) validar(caso.cfg);
   for (const g of REF.geometrias) validar(g.cfg);
+});
+
+test("DEFAULTS iguales a los de cisterna_sim/config.py", () => {
+  const soloPy = ["minutos", "bomba_min", "precalentar_s", "cada_s", "cuadro_s"]; // parámetros de corrida
+  for (const [k, v] of Object.entries(REF.defaults)) {
+    if (soloPy.includes(k)) continue;
+    assert.ok(k in DEFAULTS, `falta ${k} en DEFAULTS`);
+    assert.deepEqual(Array.isArray(DEFAULTS[k]) ? Array.from(DEFAULTS[k]) : DEFAULTS[k], v, k);
+  }
+  assert.equal(REF.defaults.forma, "redonda");
 });
 
 test.after(() => {

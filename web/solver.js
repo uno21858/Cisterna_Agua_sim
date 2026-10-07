@@ -25,14 +25,17 @@ export const FORMAS = Object.freeze(["rectangular", "redonda"]);
 export const TOL_PRESION = 1e-8;
 export const MAX_IT_PRESION = 300;
 
+// La cisterna de Erick (7 oct): redonda, tubo vertical bajo la boca con la bomba a 50 cm y el
+// chorro horizontal, sonda ORP a 20 cm, flotador junto a la bomba de pozo. Supuestos (sin medir):
+// diámetro (el cilindro de 10 m3 con 1.20 m de agua), boca al centro, pozo a 30 cm de la boca,
+// lado del llenado y chorro hacia +x (lejos del pozo). largo y ancho solo cuentan en la rectangular.
 export const DEFAULTS = Object.freeze({
-  // diametro 3.26 es supuesto: el cilindro de 10 m3 con 1.20 m de agua (pi R^2 1.20 = 10.0)
-  forma: "rectangular", diametro: 3.26,
+  forma: "redonda", diametro: 3.26,
   largo: 3.40, ancho: 2.45, nivel: 1.20, z_tapa: 1.35, dx: 0.10,
   q_max_lh: 800, h_max_m: 5, salida_mm: 8, boquilla_mm: 8, k_salida: 1.0,
-  boca: Object.freeze([1.20, 1.00]), angulo_tubo: 60, z_bomba: 0.50, z_orp: 0.20,
-  pos_bomba: null, azimut: null, elevacion: null,
-  pozo: Object.freeze([0.90, 1.00, 0.45]), llenado: Object.freeze([0.25, 1.20, 1.10]),
+  boca: Object.freeze([1.63, 1.63]), angulo_tubo: 90, z_bomba: 0.50, z_orp: 0.20,
+  pos_bomba: null, azimut: 0, elevacion: 0,
+  pozo: Object.freeze([1.33, 1.63, 0.45]), llenado: Object.freeze([1.33, 1.88, 1.10]),
   dosis_ml: 150, cloralex_mg_ml: 50, lugar_dosis: "llenado",
   cfl: 0.4, cs: 0.17, c_nu: 0.02, sc_t: 0.7,
   consumo_lpm: 0,

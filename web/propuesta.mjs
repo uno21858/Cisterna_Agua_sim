@@ -23,7 +23,9 @@ const CORTO_S = 600;
 
 // Planta, boca y pozo son los mismos supuestos de siempre. Lo nuevo (dicho por Erick): el llenado
 // queda junto a la bomba de pozo; no sabemos de qué lado, así que se prueban dos.
-const BASE = { largo: 3.40, ancho: 2.45, nivel: 1.20, boca: [1.20, 1.00], pozo: [0.90, 1.00, 0.45], dx: 0.10 };
+// Planta rectangular y mástil del doc fijos (los defaults ya son la cisterna redonda).
+const BASE = { forma: "rectangular", largo: 3.40, ancho: 2.45, nivel: 1.20, boca: [1.20, 1.00], pozo: [0.90, 1.00, 0.45],
+  dx: 0.10, angulo_tubo: 60, azimut: null, elevacion: null };
 const LLENADOS = { lado: [0.90, 1.25, 1.10], pared: [0.65, 1.00, 1.10] };
 const MASTIL = [1.20, 1.00]; // tubo vertical bajo la boca, a 30 cm de la bomba de pozo
 const AZIMUTS = [0, 30, -30, 60, -60, 90, -90, 180]; // grados en planta desde +x (0 = a lo largo, lejos del pozo)

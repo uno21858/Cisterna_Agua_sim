@@ -3,21 +3,30 @@
 Lo que sale del documento de proyecto (pág. 9, 12, 30 y 31):
   - cisterna de ~10 m3, nivel lleno ~1.20 m (flotador), la bomba de pozo
     baja el nivel hasta ~30 cm y su rejilla está a ~45 cm
-  - bomba de mezcla amarrada al mástil a ~50 cm del fondo, chorro en la
-    diagonal del tubo hacia la esquina opuesta (diseño del doc)
-  - sonda ORP en la punta del tubo a ~20 cm
+  - sonda ORP a ~20 cm del fondo
   - Cloralex ~50 mg/mL, dosis de 150 a 200 mL
+  - el doc ponía la bomba en un mástil diagonal con el chorro hacia la esquina
+    opuesta (angulo_tubo=60, azimut=None, elevacion=None, forma="rectangular")
+
+Lo que dijo Erick (7 oct), y es lo que viene por defecto:
+  - la cisterna es redonda (forma="redonda")
+  - el flotador y la boca B (por donde se echa el cloro) están justo al lado de
+    la bomba de pozo
+  - tubo vertical parado en el piso bajo la boca (angulo_tubo=90), la bomba
+    amarrada al tubo a ~50 cm con el cuerpo vertical (toma arriba) y el chorro
+    horizontal (elevacion=0), la sonda ORP a 20 cm mirando de lado
 
 Bomba comprada: Mibee 12 V brushless, 800 L/h y 5 m según la ficha, entrada
 axial G1/2 (Ø13 interior), salida radial G1/2 con Ø8 interior, cuerpo de
 ~61 x 46 x 49 mm.
 
-Supuestos (el doc no los da; cámbialos aquí o por CLI):
-  - planta rectangular de 3.40 x 2.45 m (3.40 x 2.45 x 1.20 = 10.0 m3)
-  - Erick dice que la cisterna es redonda (forma="redonda"); el diámetro no está
-    medido: 3.26 m es el que da 10 m3 a 1.20 m de nivel
-  - posición de la boca de la tapa, de la bomba de pozo y del llenado
-  - inclinación del mástil: el dibujo no tiene lo horizontal a escala
+Supuestos (nadie los ha medido; cámbialos aquí o por CLI):
+  - diámetro de 3.26 m: el que da 10 m3 a 1.20 m de nivel
+  - boca de la tapa al centro de la cisterna (1.63, 1.63)
+  - bomba de pozo a 30 cm de la boca, del lado -x: rejilla en (1.33, 1.63, 0.45)
+  - llenado junto al pozo, del lado +y (Erick no dijo de qué lado): (1.33, 1.88, 1.10)
+  - chorro hacia +x (azimut=0), lejos del pozo
+  - con forma="rectangular", planta de 3.40 x 2.45 m (3.40 x 2.45 x 1.20 = 10.0 m3)
   - curva de la bomba lineal entre (0, Hmax) y (Qmax, 0), medida con su
     propia salida de 8 mm (los 800 L/h de la ficha están sin verificar)
 """
@@ -35,14 +44,14 @@ FORMAS = ("rectangular", "redonda")
 @dataclass
 class Config:
     # Geometría (m). x a lo largo, y a lo ancho, z hacia arriba desde el fondo.
-    largo: float = 3.40
+    largo: float = 3.40  # solo con forma rectangular
     ancho: float = 2.45
     nivel: float = 1.20
-    z_tapa: float = 1.35  # travesaño del que cuelga el mástil
+    z_tapa: float = 1.35  # tapa (en el diseño del doc, travesaño del que cuelga el mástil)
     dx: float = 0.10  # tamaño objetivo de celda
     # "redonda": cilindro de centro (D/2, D/2) dentro de la caja D x D; largo y ancho
     # toman el valor del diámetro y se ignoran los que vengan.
-    forma: str = "rectangular"
+    forma: str = "redonda"
     diametro: float = 3.26  # supuesto: pi * 1.63^2 * 1.20 = 10.0 m3
 
     # Bomba de mezcla Mibee 12 V (ficha: 800 L/h, 5 m).
@@ -53,18 +62,19 @@ class Config:
     k_salida: float = 1.0  # pérdidas en una reducción, en cargas de velocidad
 
     # Mástil y puntos de interés.
-    boca: tuple[float, float] = (1.20, 1.00)  # centro de la boca de la tapa (x, y)
-    angulo_tubo: float = 60.0  # grados sobre la horizontal
+    boca: tuple[float, float] = (1.63, 1.63)  # centro de la boca de la tapa (x, y); supuesto
+    angulo_tubo: float = 90.0  # grados sobre la horizontal; 90 = tubo vertical bajo la boca
     z_bomba: float = 0.50
     z_orp: float = 0.20
-    # Posición y dirección de la bomba. None = sobre el mástil a z_bomba, chorro a lo
-    # largo del tubo (el diseño del doc). azimut en planta, grados desde +x hacia +y;
-    # elevacion en grados, positiva hacia arriba.
+    # Posición y dirección de la bomba. pos_bomba None = sobre el tubo a z_bomba.
+    # azimut en planta, grados desde +x hacia +y; elevacion en grados, positiva hacia
+    # arriba. None = a lo largo del tubo (el diseño del doc; con el tubo vertical el
+    # chorro apuntaría al fondo).
     pos_bomba: Optional[tuple[float, float, float]] = None
-    azimut: Optional[float] = None
-    elevacion: Optional[float] = None
-    pozo: tuple[float, float, float] = (0.90, 1.00, 0.45)  # rejilla de la bomba de pozo
-    llenado: tuple[float, float, float] = (0.25, 1.20, 1.10)  # donde cae el agua del flotador (boca B)
+    azimut: Optional[float] = 0.0  # hacia +x, lejos del pozo (supuesto)
+    elevacion: Optional[float] = 0.0  # chorro horizontal
+    pozo: tuple[float, float, float] = (1.33, 1.63, 0.45)  # rejilla de la bomba de pozo; supuesto: 30 cm de la boca
+    llenado: tuple[float, float, float] = (1.33, 1.88, 1.10)  # flotador (boca B), junto al pozo; lado supuesto
 
     # Dosis.
     dosis_ml: float = 150.0

@@ -6,7 +6,13 @@ import {
   Cisterna, DEFAULTS, G, configura, geometria, matrizDct, puntoOperacion, redondeaPy, tiempoMezclaS, validar,
 } from "../solver.js";
 
-const sim02 = (kw = {}) => new Cisterna({ dx: 0.2, ...kw }); // malla 17x12x6: rápida
+// Planta rectangular con el mástil diagonal del doc (los defaults de antes de la cisterna redonda).
+const RECT = Object.freeze({
+  forma: "rectangular", largo: 3.40, ancho: 2.45, boca: [1.20, 1.00], angulo_tubo: 60, azimut: null, elevacion: null,
+  pozo: [0.90, 1.00, 0.45], llenado: [0.25, 1.20, 1.10],
+});
+const rect = (kw = {}) => ({ ...RECT, ...kw });
+const sim02 = (kw = {}) => new Cisterna(rect({ dx: 0.2, ...kw })); // malla 17x12x6: rápida
 
 function corre(sim, pasos, opts) {
   for (let q = 0; q < pasos; q++) sim.avanza(sim.dtFlujo(), opts);
@@ -89,7 +95,7 @@ test("el chorro empuja en su dirección", () => {
 });
 
 test("chorro configurable", () => {
-  const g = geometria({ azimut: 90.0, elevacion: 0.0, pos_bomba: [1.0, 1.0, 0.6] });
+  const g = geometria(rect({ azimut: 90.0, elevacion: 0.0, pos_bomba: [1.0, 1.0, 0.6] }));
   g.dir_chorro.forEach((q, i) => assert.ok(Math.abs(q - [0, 1, 0][i]) < 1e-12));
   const sim = sim02({ azimut: 90.0, elevacion: 0.0, pos_bomba: [1.0, 1.0, 0.6] });
   assert.ok(suma(sim.fV) > 0 && Math.abs(suma(sim.fU)) < 1e-12 && Math.abs(suma(sim.fW)) < 1e-12);
@@ -150,17 +156,17 @@ test("validar rechaza los mismos casos que tests/test_solver.py", () => {
     { cfl: 0.9 }, { c_nu: -0.01 }, { dosis_ml: 0 }, { elevacion: 120 }, { pos_bomba: [1.0, 1.0, 1.15] },
     { sc_t: 0 }, { boca: [3.45, 1.0] }, { c_nu: NaN }, { consumo_lpm: NaN }, { cs: NaN },
   ];
-  for (const kw of invalidos) assert.throws(() => validar(kw), Error, JSON.stringify(kw));
-  assert.throws(() => new Cisterna({ nivel: 0.55 }), /casi en seco/);
-  validar({});
-  validar({ lugar_dosis: "mastil" });
-  validar({ lugar_dosis: [2.0, 1.0, 0.5] });
+  for (const kw of invalidos) assert.throws(() => validar(rect(kw)), Error, JSON.stringify(kw));
+  assert.throws(() => new Cisterna(rect({ nivel: 0.55 })), /casi en seco/);
+  validar(RECT);
+  validar(rect({ lugar_dosis: "mastil" }));
+  validar(rect({ lugar_dosis: [2.0, 1.0, 0.5] }));
 });
 
 test("validar rechaza también lo propio del motor JS", () => {
   for (const kw of [{ consumo_lpm: -1 }, { llenado_mm: 0 }, { c_llenado_mg_l: -0.1 }, { lugar_dosis: [1, 2] },
     { boca: [1.0] }, { pos_bomba: [1, 1] }, { consumo_lpm: 10, llenado: [4.0, 1.0, 1.0] }]) {
-    assert.throws(() => validar(kw), Error, JSON.stringify(kw));
+    assert.throws(() => validar(rect(kw)), Error, JSON.stringify(kw));
   }
   assert.throws(() => validar({ nivell: 1.0 }), /parámetro desconocido: nivell/);
   assert.throws(() => validar({ dosis_ml: 0, cfl: 0.9 }), /dosis_ml debe ser > 0; cfl debe estar en/);
@@ -187,7 +193,7 @@ test("puntoOperacion: mismos casos que tests/test_solver.py", () => {
 });
 
 test("geometría del mástil", () => {
-  const cfg = configura();
+  const cfg = configura(RECT);
   const g = geometria(cfg);
   const [x, y] = g.punto_tubo(cfg.z_bomba);
   const horizontal = Math.hypot(x - cfg.boca[0], y - cfg.boca[1]);
@@ -200,9 +206,35 @@ test("DEFAULTS congelado y configura copia los arreglos", () => {
   assert.ok(Object.isFrozen(DEFAULTS) && Object.isFrozen(DEFAULTS.boca));
   const cfg = configura({ nivel: 1.0 });
   cfg.boca[0] = 9;
-  assert.equal(DEFAULTS.boca[0], 1.20);
+  assert.equal(DEFAULTS.boca[0], 1.63);
   assert.equal(cfg.nivel, 1.0);
   assert.equal(cfg.pos_bomba, null);
+  // null explícito sigue valiendo: chorro por el tubo
+  const doc = configura(RECT);
+  assert.equal(doc.azimut, null);
+  assert.equal(doc.elevacion, null);
+});
+
+test("defaults: la cisterna de Erick (redonda, tubo vertical, chorro horizontal lejos del pozo)", () => {
+  validar({});
+  const cfg = configura();
+  const g = geometria(cfg);
+  assert.equal(cfg.forma, "redonda");
+  assert.ok(cfg.largo === cfg.diametro && cfg.ancho === cfg.diametro);
+  assert.ok(Math.abs(g.volumen_m3 - 10.0) < 0.02);
+  const [bx, by] = cfg.boca;
+  [bx, by, 0.5].forEach((q, i) => assert.ok(Math.abs(g.pos_bomba[i] - q) < 1e-12, "bomba sobre el tubo a 50 cm"));
+  [bx, by, 0.2].forEach((q, i) => assert.ok(Math.abs(g.sondas["sonda ORP"][i] - q) < 1e-12, "sonda ORP a 20 cm"));
+  assert.deepEqual(g.dir_chorro, [1, 0, 0]);
+  const hacia = cfg.pozo.map((q, i) => q - g.pos_bomba[i]);
+  assert.ok(g.dir_chorro[0] * hacia[0] + g.dir_chorro[1] * hacia[1] + g.dir_chorro[2] * hacia[2] < 0, "lejos del pozo");
+  assert.ok(Math.abs(Math.hypot(cfg.pozo[0] - bx, cfg.pozo[1] - by) - 0.30) < 1e-12);
+  assert.ok(Math.hypot(cfg.llenado[0] - cfg.pozo[0], cfg.llenado[1] - cfg.pozo[1]) <= 0.30 + 1e-12);
+  const sim = new Cisterna({ dx: 0.2 });
+  assert.ok(sim.redonda);
+  sim.dosificaCfg();
+  corre(sim, 20);
+  assert.ok(sim.stats().vmax > 0.01 && Math.abs(sim.masaCloroMg() / 7500 - 1) < 1e-10);
 });
 
 test("correr avanza exactamente los segundos pedidos", () => {
@@ -284,19 +316,19 @@ test("copiaEstado conserva el agua al cambiar la bomba de lugar", () => {
   assert.deepEqual(Array.from(b.u), Array.from(a.u));
   assert.equal(b.t, a.t);
   assert.equal(b.cFinal, a.cFinal);
-  assert.equal(new Cisterna({ dx: 0.25 }).copiaEstado(a), false);
+  assert.equal(new Cisterna(rect({ dx: 0.25 })).copiaEstado(a), false);
 });
 
 
 test("bomba en el tope y nivel bajo con malla gruesa son válidos", () => {
-  validar({ z_bomba: 1.10 });
-  validar({ dx: 0.2, nivel: 0.65, z_bomba: 0.40, pozo: [0.9, 1.0, 0.30] });
+  validar(rect({ z_bomba: 1.10 }));
+  validar(rect({ dx: 0.2, nivel: 0.65, z_bomba: 0.40, pozo: [0.9, 1.0, 0.30] }));
 });
 
 test("con consumo alto, prender la bomba no mezcla más lento que apagada", () => {
   const cov = {};
   for (const bomba of [true, false]) {
-    const sim = new Cisterna({ dx: 0.2, consumo_lpm: 40 });
+    const sim = sim02({ consumo_lpm: 40 });
     sim.dosificaCfg();
     while (sim.t < 20 * 60) sim.avanza(Math.min(sim.dtFlujo(), 20 * 60 - sim.t), { bomba });
     cov[bomba] = sim.stats().cov;
@@ -305,7 +337,7 @@ test("con consumo alto, prender la bomba no mezcla más lento que apagada", () =
 });
 
 test("sin consumo, el CoV de stats es std(c / cFinal) como en Python", () => {
-  const sim = new Cisterna({ dx: 0.2 });
+  const sim = sim02();
   sim.dosificaCfg();
   for (let k = 0; k < 30; k++) sim.avanza(0.5);
   const n = sim.c.length;
