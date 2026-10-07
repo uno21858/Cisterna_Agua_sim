@@ -208,11 +208,13 @@ class Config:
         puntos = {"bomba": self.pos_bomba_xyz(), "sonda ORP": self.punto_tubo(self.z_orp),
                   "pozo": self.pozo, "dosis": self.punto_dosis(),
                   "boca (sonda de superficie)": (self.boca[0], self.boca[1], self.nivel - 0.10)}
-        # en la redonda, a medio dx de la pared para que caiga en celdas de agua
+        # en la redonda, a medio dx de la pared para que caiga en celdas de agua; con cuadrados y no
+        # con hypot, que redondea distinto en JS: así los dos dan el mismo veredicto en la frontera
         r_max = self.diametro / 2 - 0.5 * self.dx
         for nombre, (x, y, z) in puntos.items():
             if self.redonda:
-                dentro = math.hypot(x - self.diametro / 2, y - self.diametro / 2) <= r_max
+                ox, oy = x - self.diametro / 2, y - self.diametro / 2
+                dentro = ox * ox + oy * oy <= r_max * r_max
             else:
                 dentro = 0 < x < self.largo and 0 < y < self.ancho
             if not (dentro and 0 < z < self.nivel):

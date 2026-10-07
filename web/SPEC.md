@@ -211,6 +211,11 @@ tolerancia 1e-13, dan u, v, w, c, dtFlujo y sondas iguales a Python con error re
 - **Sección del chorro**: en la redonda es la cuerda del círculo por la bomba (igual que Python).
 - **Difusión (punto 3)**: el vecino tangencial cerrado se escribe como fantasma `-u` (mismo número que "vale 0 y
   se suma -u/h²"), con banderas por columna; las caras de la caja son el mismo caso.
+- **Frontera exacta**: la distancia radial de la validación (punto 8) se compara con cuadrados,
+  `ox·ox + oy·oy <= rMax·rMax`, y la máscara (punto 1) usa `R·R`, solo con multiplicaciones y sumas, que dan el mismo
+  bit en Python y JS. Con `hypot` (y `R**2`) no: `math.hypot` y `Math.hypot` redondean distinto, y de 4000 puntos
+  construidos sobre `R - 0.5·dx` 121 tenían veredicto distinto en los dos. Con cuadrados: 0 de 4000, 0 de 6000
+  configuraciones al azar y 300 máscaras iguales.
 - **Validación**: `diametro/dx >= 8` y `R - 0.5·dx` usan el `dx` de la config, no el de la malla. El llenado se
   valida con consumo y también cuando es el lugar de la dosis (como ya pasaba). `diametro` debe ser > 0 siempre.
 - **copiaEstado**: solo entre cisternas de la misma forma y malla; copia también `p`.
@@ -272,10 +277,12 @@ los dos lados (`sim.tol_cg` y `sim.tolPresion`, guardada en el caso como `tol_pr
 `web/test/referencia.test.js` lo compara con error relativo < 1e-6 en u, v, w, c, estadísticas, sondas, muestras
 junto a la pared y fuera del agua, sección del chorro, `dtFlujo` y `dtCloro`. Resultado: error relativo máximo
 1.35e-15 (c; u, v, w <= 9.3e-16) y el mismo número de iteraciones del gradiente conjugado en cada paso (897 en
-total); la prueba exige que el total no difiera más de 2 %. `validar()` se compara con 25 configuraciones que los
-dos rechazan (12 rectangulares y 13 redondas) y 7 que los dos aceptan (en los límites: medio dx de la pared,
-`diametro/dx` = 8.15 y 8 exacto, llenado fuera del círculo cuando no es la dosis). No hizo falta cambiar ni el
-solver de Python ni el de JS.
+total); la prueba exige que el total no difiera más de 2 %. `validar()` se compara con 28 configuraciones que los
+dos rechazan (12 rectangulares y 16 redondas) y 10 que los dos aceptan (en los límites: medio dx de la pared,
+`diametro/dx` = 8.15 y 8 exacto, llenado fuera del círculo cuando no es la dosis, y 6 puntos sobre `R - 0.5·dx` al
+último bit, ver "Frontera exacta"); `tests/test_referencia.py` revisa que `ref_py.json` esté al día con esas
+listas y con los defaults de `config.py`. Los campos no pidieron cambios en ningún solver; la validación sí (cuadrados
+en vez de `hypot`, en los dos).
 
 ### Lado Python (`cisterna_sim/`)
 

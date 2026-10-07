@@ -91,7 +91,20 @@ _INV_RED = [
     {"diametro": -1.0},
     {"forma": "cuadrada"},
 ]
-INVALIDOS = [{**RECT, **kw} for kw in _INV_RECT] + [{**RED, "dx": 0.2, **kw} for kw in _INV_RED]
+# Justo en la frontera R - dx/2 (al último bit): con hypot, Python y JS daban veredictos distintos.
+_D2 = {"diametro": 2.0, "dx": 0.1, "boca": [1.0, 1.0], "pozo": [0.8, 1.0, 0.45], "llenado": [0.8, 1.15, 1.1]}
+_BORDE_FUERA = [
+    {**_D2, "llenado": [1.384770208172431, 0.1314081010607201, 0.45]},
+    {"dx": 0.1, "pos_bomba": [1.9411474085938847, 0.08093986878323212, 0.45]},
+    {"dx": 0.1, "pozo": [2.981802000829309, 0.8120566336512801, 0.45]},
+]
+_BORDE_DENTRO = [
+    {**_D2, "pos_bomba": [1.4817082620726778, 0.18118552146965528, 0.45]},
+    {"dx": 0.1, "llenado": [0.30112948308136533, 0.7753052303515596, 0.45]},
+    {"dx": 0.1, "pozo": [2.1303357326282266, 3.1286874773131905, 0.45]},
+]
+INVALIDOS = ([{**RECT, **kw} for kw in _INV_RECT] + [{**RED, "dx": 0.2, **kw} for kw in _INV_RED]
+             + [{**RED, **kw} for kw in _BORDE_FUERA])
 
 # Válidos en los dos (junto a los límites de los de arriba).
 VALIDOS = [
@@ -102,7 +115,7 @@ VALIDOS = [
     {**RED, "dx": 0.2, "diametro": 1.6, "boca": [0.8, 0.8], "pozo": [0.6, 0.8, 0.45], "llenado": [1.0, 0.8, 1.1]},
     {**RED, "dx": 0.2, "lugar_dosis": "mastil", "llenado": [0.2, 0.2, 1.1]},  # el llenado no es la dosis
     {**RED, "dx": 0.1, "boca": [0.06, D / 2], "pos_bomba": [1.6, 1.6, 0.5]},
-]
+] + [{**RED, **kw} for kw in _BORDE_DENTRO]
 
 GEOMETRIAS = [
     RECT,

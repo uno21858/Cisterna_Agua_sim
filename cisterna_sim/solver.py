@@ -244,7 +244,7 @@ class Cisterna:
             cx, cy, r = cfg.largo / 2, cfg.ancho / 2, cfg.diametro / 2
             xc = (np.arange(nx) + 0.5) * self.dx
             yc = (np.arange(ny) + 0.5) * self.dy
-            self._fija_mascara((xc[:, None] - cx) ** 2 + (yc[None, :] - cy) ** 2 <= r**2)
+            self._fija_mascara((xc[:, None] - cx) ** 2 + (yc[None, :] - cy) ** 2 <= r * r)
         else:
             self._fija_mascara(np.ones((nx, ny), dtype=bool))
 

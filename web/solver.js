@@ -220,10 +220,12 @@ export function validar(cfgParcial = {}) {
     "boca (sonda de superficie)": [c.boca[0], c.boca[1], c.nivel - 0.10],
   };
   if (c.consumo_lpm > 0) puntos.llenado = fuenteLlenado(c);
-  // en la redonda, a media celda o más de la pared
+  // en la redonda, a media celda o más de la pared; con cuadrados y no con Math.hypot, que redondea
+  // distinto que Python: así los dos dan el mismo veredicto en la frontera
   const r = c.diametro / 2, rMax = r - 0.5 * c.dx;
   for (const [nombre, [x, y, z]] of Object.entries(puntos)) {
-    const enPlanta = redonda ? Math.hypot(x - r, y - r) <= rMax : x > 0 && x < c.largo && y > 0 && y < c.ancho;
+    const enPlanta = redonda ? (x - r) * (x - r) + (y - r) * (y - r) <= rMax * rMax
+      : x > 0 && x < c.largo && y > 0 && y < c.ancho;
     if (!(enPlanta && z > 0 && z < c.nivel)) {
       errores.push(`${nombre} (${fmt(x)}, ${fmt(y)}, ${fmt(z)}) queda fuera del agua o de la cisterna`);
     }
@@ -566,7 +568,7 @@ export class Cisterna {
     const { nx, ny, nz, dx, dy } = this;
     this.redonda = cfg.forma === "redonda";
     const agua = new Uint8Array(nx * ny);
-    const cx = cfg.largo / 2, cy = cfg.ancho / 2, r2 = (cfg.diametro / 2) ** 2;
+    const cx = cfg.largo / 2, cy = cfg.ancho / 2, r = cfg.diametro / 2, r2 = r * r;
     for (let i = 0; i < nx; i++) {
       for (let j = 0; j < ny; j++) {
         const xc = (i + 0.5) * dx - cx, yc = (j + 0.5) * dy - cy;
