@@ -5,6 +5,7 @@
 //
 //   node web/propuesta.mjs              corre lo que falte (3 hilos) y escribe el reporte
 //   node web/propuesta.mjs --reporte    solo el reporte
+//   node web/propuesta.mjs --plan       qué casos tocan y cuáles faltan
 //
 // Resultados en web/resultados_propuesta/casos.jsonl; al relanzar se salta lo ya hecho.
 
@@ -154,14 +155,17 @@ export function simula(c) {
 // ---- plan por etapas (cada etapa elige con lo ya corrido) ----
 
 const nominal = (r) => (r.dx ?? 0.10) === 0.10 && !r.daz;
-const costo = (r) => (r.t95 ?? 90 + 100 * (r.cov45 ?? 1)) + 20 * Math.max(0, r.corto - 1.5);
+// Se elige por la mezcla. Aquí el cloro cae a 25 cm del pozo y el pico en la rejilla sale de 3 a 5 veces la
+// meta casi con cualquier chorro; lo que cuenta es cuánto se va a la casa, y eso lo mide la etapa de consumo.
+const costo = (r) => r.t95 ?? 90 + 100 * (r.cov45 ?? 1);
+const tamiz = (hechos, llenado) => [...hechos.values()]
+  .filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo && nominal(r));
 
 // Con el llenado entre el pozo y la pared, az y -az son el mismo caso en espejo: cuenta una vez.
 function mejores(hechos, llenado, n) {
   const vistos = new Set();
-  return [...hechos.values()]
-    .filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo && nominal(r))
-    .sort((a, b) => costo(a) - costo(b) || Math.abs(a.az) - Math.abs(b.az) || b.az - a.az)
+  return tamiz(hechos, llenado)
+    .sort((a, b) => costo(a) - costo(b) || a.corto - b.corto || Math.abs(a.az) - Math.abs(b.az) || b.az - a.az)
     .filter((r) => {
       const k = llenado === "pared" ? `${Math.abs(r.az)}|${r.el}` : `${r.az}|${r.el}`;
       if (vistos.has(k)) return false;
@@ -170,6 +174,8 @@ function mejores(hechos, llenado, n) {
     })
     .slice(0, n);
 }
+
+const menosPico = (hechos, llenado) => tamiz(hechos, llenado).sort((a, b) => a.corto - b.corto || costo(a) - costo(b))[0];
 
 function plan(hechos) {
   const etapas = [];
@@ -188,6 +194,8 @@ function plan(hechos) {
     const m = top[0];
     for (const q of [15]) {
       consumo.push(caso({ tipo: "propuesta", llenado, az: m.az, el: m.el, consumo: q }));
+      const b = menosPico(hechos, llenado);
+      if (b.id !== m.id) consumo.push(caso({ tipo: "propuesta", llenado, az: b.az, el: b.el, consumo: q }));
       consumo.push(caso({ tipo: "doc", llenado, consumo: q }));
       consumo.push(caso({ tipo: "tangencial", llenado, consumo: q }));
       consumo.push(caso({ tipo: "propuesta", llenado, az: m.az, el: m.el, consumo: q, sin_bomba: true }));
@@ -280,9 +288,10 @@ function reporte(hechos) {
     L.push("", "Detalle (t95 / ±10 % en min, pico, rapidez máxima en el fondo, giro medio y rapidez media del agua en cm/s):", "",
       "| caso | t95 | ±10 % | pico | fondo m/s | giro cm/s | rapidez cm/s |", "|---|---|---|---|---|---|---|");
     const fila = (nombre, r) => L.push(`| ${nombre} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${r.vf_med} | ${cm(r.giro)} | ${cm(r.rapidez)} |`);
-    const props = todos.filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo && nominal(r))
-      .sort((a, b) => costo(a) - costo(b));
+    const props = tamiz(hechos, llenado).sort((a, b) => costo(a) - costo(b));
     for (const r of props.slice(0, 4)) fila(`propuesta az ${r.az} el ${r.el}`, r);
+    const b = menosPico(hechos, llenado);
+    if (b && !props.slice(0, 4).includes(b)) fila(`propuesta az ${b.az} el ${b.el} (el menor pico)`, b);
     const ref = (tipo) => hechos.get(caso({ tipo, llenado }).id);
     const d = ref("doc"), ta = ref("tangencial");
     if (d) fila("diseño del doc (mástil a 60°, chorro -60°)", d);
@@ -343,6 +352,13 @@ function carga() {
 async function main() {
   fs.mkdirSync(DIR, { recursive: true });
   const hechos = carga();
+  if (process.argv.includes("--plan")) {
+    for (const [nombre, casos] of plan(hechos)) {
+      console.log(`Etapa ${nombre}:`);
+      for (const c of casos) console.log(`  ${hechos.has(c.id) ? "hecho" : "falta"} ${c.id}`);
+    }
+    return;
+  }
   if (!process.argv.includes("--reporte")) {
     for (let vuelta = 0; vuelta < 3; vuelta++) {
       for (const [nombre, casos] of plan(hechos)) {
