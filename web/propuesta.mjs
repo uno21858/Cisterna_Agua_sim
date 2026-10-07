@@ -108,6 +108,7 @@ export function simula(c) {
   const zFondo = sim.dz / 2;
   const t = [], cov = [], cmin = [], cmax = [];
   let corto = 0, vfSuma = 0, giroSuma = 0, rapSuma = 0, nOn = 0, prox = 0, sale10 = null, sale45 = null;
+  let llave = 0, sobre2 = 0, salePrev = 0, tPrev = 0;
   for (;;) {
     if (sim.t >= prox - 1e-9) {
       const s = sim.stats();
@@ -125,6 +126,14 @@ export function simula(c) {
         rapSuma += gr;
         nOn++;
       }
+      if (sim.q > 0 && sim.t > 0) {
+        // lo que le llega a la casa, promedio de los últimos 10 s, en veces la meta
+        const ll = (sim.salida_mg - salePrev) / (sim.q * 1000 * (sim.t - tPrev)) / cf;
+        llave = Math.max(llave, ll);
+        if (ll > 2) sobre2 += (sim.t - tPrev) / 60;
+      }
+      salePrev = sim.salida_mg;
+      tPrev = sim.t;
       if (sale10 == null && sim.t >= 600 - 1e-9) sale10 = sim.salida_mg / masa;
       if (sale45 == null && sim.t >= 2700 - 1e-9) sale45 = sim.salida_mg / masa;
       prox += MUESTRA_S;
@@ -150,6 +159,8 @@ export function simula(c) {
     rapidez: nOn ? Math.round((rapSuma / nOn) * 1e4) / 1e4 : null,
     sale10: sale10 == null ? null : r3(sale10),
     sale45: sale45 == null ? null : r3(sale45),
+    llave: sim.q > 0 ? r3(llave) : null,
+    sobre2: sim.q > 0 ? r3(sobre2) : null,
     seg: r3((performance.now() - t0r) / 1000),
   };
 }
@@ -341,19 +352,23 @@ function reporte(hechos) {
           (r.dosis ?? "llenado") === (v.dosis ?? "llenado")) : undefined)]).filter(([, r]) => r);
     if (dos.some(([, r]) => r.dosis === "mastil")) {
       L.push("", `Dónde echar el cloro, con la recomendada (az ${rec.az}, el ${rec.el}, 50 cm):`, "",
-        "| cloro | t95 | ±10 % | pico | a la casa en 10 min | en 45 min |", "|---|---|---|---|---|---|");
+        "| cloro | t95 | ±10 % | pico en la rejilla | a la casa en 10 min | en 45 min | pico en la llave | min arriba de 2 veces |",
+        "|---|---|---|---|---|---|---|---|");
       for (const [n, r] of dos) {
-        L.push(`| ${n} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${r.consumo ? (100 * r.sale10).toFixed(1) + " %" : "-"} | ${r.consumo ? (100 * r.sale45).toFixed(1) + " %" : "-"} |`);
+        const q = r.consumo ? [`${(100 * r.sale10).toFixed(1)} %`, `${(100 * r.sale45).toFixed(1)} %`, r.llave?.toFixed(2) ?? "", r.sobre2?.toFixed(1) ?? ""]
+          : ["-", "-", "-", "-"];
+        L.push(`| ${n} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${q.join(" | ")} |`);
       }
     }
     const con = todos.filter((r) => r.llenado === llenado && r.consumo && nominal(r));
     if (con.length) {
       L.push("", "Con la casa usando 15 L/min desde que se echa el cloro:", "",
-        "| caso | t95 | cloro que se fue a la casa en 10 min | en 45 min |", "|---|---|---|---|");
+        "| caso | t95 | cloro que se fue a la casa en 10 min | en 45 min | pico en la llave (veces la meta, 10 s) | min arriba de 2 veces |",
+        "|---|---|---|---|---|---|");
       for (const r of con) {
         const nombre = r.tipo === "doc" ? "diseño del doc" : r.tipo === "tangencial" ? "tangencial junto a la pared"
           : r.sin_bomba ? "sin bomba de mezcla" : `propuesta az ${r.az} el ${r.el}`;
-        L.push(`| ${nombre} | ${fmt(r.t95)} | ${(100 * r.sale10).toFixed(1)} % | ${(100 * r.sale45).toFixed(1)} % |`);
+        L.push(`| ${nombre} | ${fmt(r.t95)} | ${(100 * r.sale10).toFixed(1)} % | ${(100 * r.sale45).toFixed(1)} % | ${r.llave?.toFixed(2) ?? ""} | ${r.sobre2?.toFixed(1) ?? ""} |`);
       }
     }
     L.push("");
