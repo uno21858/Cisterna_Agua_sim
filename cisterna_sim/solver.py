@@ -15,6 +15,12 @@ pocas celdas. Lejos de la boquilla un chorro turbulento solo depende de M,
 que es justo lo que usa la correlación de mezcla. La turbulencia que la malla
 no ve entra como viscosidad de fondo c_nu * sqrt(M) (ver config).
 
+Cisterna redonda (cfg.forma = "redonda"): la misma malla sobre la caja que
+contiene al círculo, con una máscara de celdas de agua por columna. Las caras
+que tocan una celda seca quedan cerradas (pared escalonada sin deslizamiento),
+y la presión ya no sale de una sola DCT: se resuelve con gradiente conjugado
+usando la DCT de la caja como precondicionador (web/SPEC.md, "Cisterna redonda").
+
 Corre en CPU con numpy o en GPU con CuPy (gpu=True); f32=True usa precisión
 simple, que en tarjetas GeForce es mucho más rápida que la doble.
 """
@@ -23,6 +29,7 @@ from __future__ import annotations
 
 import copy
 import math
+import warnings
 
 import numpy as np
 from scipy import fft as fft_cpu
@@ -34,6 +41,10 @@ NU_AGUA = 1.0e-6  # m2/s, ~20 C
 DT_MAX = 0.5  # s
 CFL_FLUJO = 0.9
 ARRANQUE_S = 300.0  # el flujo tarda unos minutos en desarrollarse
+# Gradiente conjugado de la redonda: max|r| <= TOL * max|b|. En precisión simple apretar
+# más de 1e-6 ya no cambia la solución (manda el redondeo) y solo cuesta iteraciones.
+TOL_CG = {np.dtype(np.float64): 1e-8, np.dtype(np.float32): 1e-6}
+ITER_MAX_CG = 300
 
 # Desfase del índice de cada arreglo respecto a la esquina de su celda.
 OFF_U = (0.0, 0.5, 0.5)
@@ -90,12 +101,16 @@ def _grad(a, h: float, axis: int):
     return _xp(a).concatenate([ini, cen, fin], axis=axis)
 
 
-def _pendiente_van_leer(c: np.ndarray, axis: int) -> np.ndarray:
+def _pendiente_van_leer(c: np.ndarray, axis: int, vecinos=None) -> np.ndarray:
+    """vecinos: (izq, der), 1 donde el vecino es agua; uno seco cuenta como la celda propia."""
     xp = _xp(c)
     nd = c.ndim
     p = xp.concatenate([c[_sl(nd, axis, slice(0, 1))], c, c[_sl(nd, axis, slice(-1, None))]], axis=axis)
     a = c - p[_sl(nd, axis, slice(None, -2))]
     b = p[_sl(nd, axis, slice(2, None))] - c
+    if vecinos is not None:
+        a = a * vecinos[0]
+        b = b * vecinos[1]
     ab = a * b
     suma = a + b
     # con ab > 0 la suma nunca es cero; el 1 solo evita dividir entre cero en lo descartado
@@ -154,6 +169,8 @@ class Cisterna:
         self.vol_celda = self.dx * self.dy * self.dz
         self.delta = self.vol_celda ** (1 / 3)
         nx, ny, nz = self.nx, self.ny, self.nz
+        self.redonda = cfg.redonda
+        self._mascaras()
 
         self.u = xp.zeros((nx + 1, ny, nz), dtype=dt)
         self.v = xp.zeros((nx, ny + 1, nz), dtype=dt)
@@ -181,10 +198,74 @@ class Cisterna:
         lam = lx[:, None, None] + ly[None, :, None] + lz[None, None, :]
         lam[0, 0, 0] = 1.0  # modo constante: presión definida salvo constante
         self.lam = xp.asarray(lam, dtype=dt)
+        if self.redonda:
+            pre = -1 / lam
+            pre[0, 0, 0] = 0.0
+            self._inv_menos_lam = xp.asarray(pre, dtype=dt)
+            self.p = xp.zeros((nx, ny, nz), dtype=dt)  # arranque del siguiente paso
+            self.iter_cg = 0
+            self._avisado_cg = False
 
         self.inv_h2 = 1 / self.dx**2 + 1 / self.dy**2 + 1 / self.dz**2
 
     # ---- geometría ----
+
+    def _mascaras(self):
+        """Celdas de agua y caras abiertas (en la rectangular, todas las interiores)."""
+        cfg, xp, dt = self.cfg, self.xp, self.dtype
+        nx, ny, nz = self.nx, self.ny, self.nz
+        if self.redonda:
+            cx, cy, r = cfg.largo / 2, cfg.ancho / 2, cfg.diametro / 2
+            xc = (np.arange(nx) + 0.5) * self.dx
+            yc = (np.arange(ny) + 0.5) * self.dy
+            col = (xc[:, None] - cx) ** 2 + (yc[None, :] - cy) ** 2 <= r**2
+        else:
+            col = np.ones((nx, ny), dtype=bool)
+        agua = np.repeat(col[:, :, None], nz, axis=2)
+        abiertas = []
+        for eje in range(3):
+            shape = list(agua.shape)
+            shape[eje] += 1
+            m = np.zeros(shape, dtype=bool)
+            m[_sl(3, eje, slice(1, -1))] = agua[_sl(3, eje, slice(1, None))] & agua[_sl(3, eje, slice(None, -1))]
+            abiertas.append(m)
+        self.n_agua = int(agua.sum())
+        self.agua = xp.asarray(agua, dtype=dt)
+        self.abierta = tuple(xp.asarray(m, dtype=dt) for m in abiertas)
+        if not self.redonda:
+            return
+        self._agua_bool = xp.asarray(agua)
+        h = (self.dx, self.dy, self.dz)
+        # Laplaciano de la presión: coeficiente 1/h^2 en cada cara interior abierta.
+        self._coef_p = tuple(xp.asarray(m[_sl(3, eje, slice(1, -1))] / h[eje] ** 2, dtype=dt)
+                             for eje, m in enumerate(abiertas))
+        # Difusión: cada vecino tangencial que es cara cerrada dentro de la caja suma -u/h^2.
+        self._extra = []
+        for normal, m in enumerate(abiertas):
+            cerrada = ~m
+            e = np.zeros(m.shape)
+            for eje in range(3):
+                if eje != normal:
+                    e[_sl(3, eje, slice(1, None))] += cerrada[_sl(3, eje, slice(None, -1))] / h[eje] ** 2
+                    e[_sl(3, eje, slice(None, -1))] += cerrada[_sl(3, eje, slice(1, None))] / h[eje] ** 2
+            self._extra.append(xp.asarray(e * m, dtype=dt))
+        # Vecinos en agua para la pendiente MUSCL (en z la columna es toda agua).
+        self._vecinos = []
+        for eje in range(2):
+            uno = np.ones_like(agua[_sl(3, eje, slice(0, 1))])
+            izq = np.concatenate([uno, agua[_sl(3, eje, slice(None, -1))]], axis=eje)
+            der = np.concatenate([agua[_sl(3, eje, slice(1, None))], uno], axis=eje)
+            self._vecinos.append((xp.asarray(izq, dtype=dt), xp.asarray(der, dtype=dt)))
+        self._vecinos.append(None)
+
+    @property
+    def volumen_m3(self) -> float:
+        """Volumen discreto del agua (celdas de agua por volumen de celda)."""
+        return self.n_agua * self.vol_celda
+
+    def en_agua(self, a):
+        """Valores de un campo de centros en las celdas de agua (en la redonda, aplanados)."""
+        return a[self._agua_bool] if self.redonda else a
 
     def _coords(self, shape, off):
         i, j, k = np.meshgrid(*(np.arange(n, dtype=float) for n in shape), indexing="ij")
@@ -200,11 +281,8 @@ class Cisterna:
         sigma = 0.6 * self.delta
         m = self.bomba.m_m4s2
         fuerzas = []
-        for p, comp, eje in ((self.p_u, d[0], 0), (self.p_v, d[1], 1), (self.p_w, d[2], 2)):
-            interior = self.xp.ones_like(p[0])
-            interior[_sl(3, eje, slice(0, 1))] = 0
-            interior[_sl(3, eje, slice(-1, None))] = 0
-            w = _gauss_normalizado(*p, centro, sigma, interior)
+        for p, comp, abierta in zip((self.p_u, self.p_v, self.p_w), d, self.abierta):
+            w = _gauss_normalizado(*p, centro, sigma, abierta)
             fuerzas.append((m * float(comp) * w / self.vol_celda).astype(self.dtype))
         return fuerzas
 
@@ -244,9 +322,14 @@ class Cisterna:
         u, v, w = self.velocidad_en(x - 0.5 * dt * u, y - 0.5 * dt * v, z - 0.5 * dt * w)
         return self.muestrea(a, off, x - dt * u, y - dt * v, z - dt * w).reshape(a.shape)
 
+    def _div(self, u, v, w):
+        return ((u[1:] - u[:-1]) / self.dx + (v[:, 1:] - v[:, :-1]) / self.dy
+                + (w[:, :, 1:] - w[:, :, :-1]) / self.dz)
+
     def _proyecta(self, u, v, w, dt):
-        div = ((u[1:] - u[:-1]) / self.dx + (v[:, 1:] - v[:, :-1]) / self.dy
-               + (w[:, :, 1:] - w[:, :, :-1]) / self.dz)
+        if self.redonda:
+            return self._proyecta_mascara(u, v, w, dt)
+        div = self._div(u, v, w)
         ph = self._fft.dctn(div / dt, type=2, norm="ortho") / self.lam
         ph[0, 0, 0] = 0.0
         p = self._fft.idctn(ph, type=2, norm="ortho")
@@ -254,9 +337,65 @@ class Cisterna:
         v[:, 1:-1] -= dt * (p[:, 1:] - p[:, :-1]) / self.dy
         w[:, :, 1:-1] -= dt * (p[:, :, 1:] - p[:, :, :-1]) / self.dz
 
+    def _lap_agua(self, p):
+        """Suma sobre las caras abiertas de (p_vecino - p) / h^2, en cada celda."""
+        out = self.xp.zeros_like(p)
+        for eje, coef in enumerate(self._coef_p):
+            n = p.shape[eje]
+            g = coef * (p[_sl(3, eje, slice(1, n))] - p[_sl(3, eje, slice(0, n - 1))])
+            out[_sl(3, eje, slice(0, n - 1))] += g
+            out[_sl(3, eje, slice(1, n))] -= g
+        return out
+
+    def _precondiciona(self, r):
+        """DCT exacta de la caja para (-lap) z = r, recortada al agua y sin media."""
+        fft = self._fft
+        z = fft.idctn(fft.dctn(r, type=2, norm="ortho") * self._inv_menos_lam, type=2, norm="ortho")
+        z *= self.agua
+        z -= z.sum() / self.n_agua
+        z *= self.agua
+        return z
+
+    def _presion(self, b):
+        """Gradiente conjugado precondicionado para lap_agua(p) = b, arrancando de la p anterior."""
+        xp, p = self.xp, self.p
+        lim = TOL_CG[np.dtype(self.dtype)] * float(xp.abs(b).max())
+        if lim == 0:
+            p[:] = 0
+            self.iter_cg = 0
+            return p
+        r = self._lap_agua(p) - b  # residuo de (-lap) p = -b
+        it, rz, d = 0, 0.0, None
+        while float(xp.abs(r).max()) > lim:
+            if it == ITER_MAX_CG:
+                if not self._avisado_cg:
+                    warnings.warn(f"la presión no convergió en {ITER_MAX_CG} iteraciones", RuntimeWarning,
+                                  stacklevel=2)
+                    self._avisado_cg = True
+                break
+            z = self._precondiciona(r)
+            rz, rz_ant = float(xp.vdot(r, z)), rz
+            d = z if d is None else z + (rz / rz_ant) * d
+            ad = self._lap_agua(d)
+            alfa = rz / -float(xp.vdot(d, ad))
+            p += alfa * d
+            r += alfa * ad
+            it += 1
+        self.iter_cg = it
+        return p
+
+    def _proyecta_mascara(self, u, v, w, dt):
+        b = self._div(u, v, w) / dt
+        b -= b.sum() / self.n_agua
+        b *= self.agua
+        p = self._presion(b)
+        au, av, aw = self.abierta
+        u[1:-1] -= (dt / self.dx) * (p[1:] - p[:-1]) * au[1:-1]
+        v[:, 1:-1] -= (dt / self.dy) * (p[:, 1:] - p[:, :-1]) * av[:, 1:-1]
+        w[:, :, 1:-1] -= (dt / self.dz) * (p[:, :, 1:] - p[:, :, :-1]) * aw[:, :, 1:-1]
+
     def divergencia(self):
-        return ((self.u[1:] - self.u[:-1]) / self.dx + (self.v[:, 1:] - self.v[:, :-1]) / self.dy
-                + (self.w[:, :, 1:] - self.w[:, :, :-1]) / self.dz)
+        return self._div(self.u, self.v, self.w)
 
     def paso_flujo(self, dt, bomba_encendida=True):
         self.nu_c = NU_AGUA + self._nu_turbulenta() + (self.nu_fondo if bomba_encendida else 0.0)
@@ -264,14 +403,23 @@ class Cisterna:
         lap_u = _d2(u, 0, self.dx, 0, 0) + _d2(u, 1, self.dy, -1, -1) + _d2(u, 2, self.dz, -1, 1)
         lap_v = _d2(v, 0, self.dx, -1, -1) + _d2(v, 1, self.dy, 0, 0) + _d2(v, 2, self.dz, -1, 1)
         lap_w = _d2(w, 0, self.dx, -1, -1) + _d2(w, 1, self.dy, -1, -1) + _d2(w, 2, self.dz, 0, 0)
+        if self.redonda:
+            lap_u -= self._extra[0] * u
+            lap_v -= self._extra[1] * v
+            lap_w -= self._extra[2] * w
         on = 1.0 if bomba_encendida else 0.0
 
         un = self._advecta(u, OFF_U, self.p_u, dt) + dt * (_a_caras(self.nu_c, 0) * lap_u + on * self.f_u)
         vn = self._advecta(v, OFF_V, self.p_v, dt) + dt * (_a_caras(self.nu_c, 1) * lap_v + on * self.f_v)
         wn = self._advecta(w, OFF_W, self.p_w, dt) + dt * (_a_caras(self.nu_c, 2) * lap_w + on * self.f_w)
-        un[0] = un[-1] = 0.0
-        vn[:, 0] = vn[:, -1] = 0.0
-        wn[:, :, 0] = wn[:, :, -1] = 0.0
+        if self.redonda:
+            un *= self.abierta[0]
+            vn *= self.abierta[1]
+            wn *= self.abierta[2]
+        else:
+            un[0] = un[-1] = 0.0
+            vn[:, 0] = vn[:, -1] = 0.0
+            wn[:, :, 0] = wn[:, :, -1] = 0.0
         self._proyecta(un, vn, wn, dt)
         self.u, self.v, self.w = un, vn, wn
 
@@ -282,7 +430,7 @@ class Cisterna:
         out = xp.zeros_like(c)
         for eje, vel, h in ((0, self.u, self.dx), (1, self.v, self.dy), (2, self.w, self.dz)):
             n = c.shape[eje]
-            s = _pendiente_van_leer(c, eje)
+            s = _pendiente_van_leer(c, eje, self._vecinos[eje] if self.redonda else None)
             izq = c[_sl(3, eje, slice(0, n - 1))]
             der = c[_sl(3, eje, slice(1, n))]
             c_izq = izq + 0.5 * s[_sl(3, eje, slice(0, n - 1))]
@@ -290,6 +438,8 @@ class Cisterna:
             vf = vel[_sl(3, eje, slice(1, n))]  # caras interiores
             d_f = 0.5 * (d[_sl(3, eje, slice(0, n - 1))] + d[_sl(3, eje, slice(1, n))])
             flujo = vf * xp.where(vf > 0, c_izq, c_der) - d_f * (der - izq) / h
+            if self.redonda:
+                flujo *= self.abierta[eje][_sl(3, eje, slice(1, n))]
             cero = xp.zeros_like(c[_sl(3, eje, slice(0, 1))])  # paredes sin flujo
             flujo = xp.concatenate([cero, flujo, cero], axis=eje)
             out -= (flujo[_sl(3, eje, slice(1, None))] - flujo[_sl(3, eje, slice(None, -1))]) / h
@@ -303,7 +453,7 @@ class Cisterna:
     def dosifica(self, masa_mg, punto, sigma=None):
         """Suelta la dosis como una nube gaussiana alrededor de punto."""
         sigma = sigma or self.delta
-        w = _gauss_normalizado(*self.p_c, punto, sigma)
+        w = _gauss_normalizado(*self.p_c, punto, sigma, self.agua if self.redonda else None)
         self.c += masa_mg * w / (self.vol_celda * 1000.0)  # mg / L
 
     # ---- control de paso ----
@@ -338,21 +488,27 @@ class Cisterna:
     def energia_cinetica(self):
         """J por kg de agua, promedio en el volumen."""
         uc, vc, wc = self.velocidad_centros()
-        return 0.5 * float((uc**2 + vc**2 + wc**2).mean(dtype=np.float64))
+        return 0.5 * float(self.en_agua(uc**2 + vc**2 + wc**2).mean(dtype=np.float64))
 
     def seccion_chorro(self, campo="c"):
         """Corte vertical por el plano del chorro: (s, z, valores[nz, ns])."""
         cfg = self.cfg
         hx, hy = cfg.plano_chorro()
         x0, y0, _ = cfg.pos_bomba_xyz()
-        # tramo de la recta (x0, y0) + s (hx, hy) dentro de la planta
-        lims = []
-        for p0, h, L in ((x0, hx, cfg.largo), (y0, hy, cfg.ancho)):
-            if abs(h) > 1e-12:
-                a, b = (0 - p0) / h, (L - p0) / h
-                lims.append((min(a, b), max(a, b)))
-        s_min = max(l[0] for l in lims)
-        s_max = min(l[1] for l in lims)
+        # tramo de la recta (x0, y0) + s (hx, hy) dentro de la planta (en la redonda, la cuerda)
+        if self.redonda:
+            ox, oy, r = x0 - cfg.largo / 2, y0 - cfg.ancho / 2, cfg.diametro / 2
+            bq = ox * hx + oy * hy
+            raiz = math.sqrt(max(bq * bq - (ox * ox + oy * oy - r * r), 0.0))
+            s_min, s_max = -bq - raiz, -bq + raiz
+        else:
+            lims = []
+            for p0, h, L in ((x0, hx, cfg.largo), (y0, hy, cfg.ancho)):
+                if abs(h) > 1e-12:
+                    a, b = (0 - p0) / h, (L - p0) / h
+                    lims.append((min(a, b), max(a, b)))
+            s_min = max(l[0] for l in lims)
+            s_max = min(l[1] for l in lims)
         ns = max(8, int((s_max - s_min) / min(self.dx, self.dy)) + 1)
         s = np.linspace(s_min, s_max, ns)
         z = (np.arange(self.nz) + 0.5) * self.dz
@@ -389,7 +545,7 @@ def correr(cfg: Config, progreso=print, gpu=False, f32=False):
     sim = Cisterna(cfg, gpu=gpu, f32=f32)
     xp = sim.xp
     masa = cfg.dosis_ml * cfg.cloralex_mg_ml
-    c_final = masa / (sim.nx * sim.ny * sim.nz * sim.vol_celda * 1000.0)
+    c_final = masa / (sim.volumen_m3 * 1000.0)
     sondas = cfg.sondas()
     t_dosis = cfg.precalentar_s
     t_fin = t_dosis + cfg.minutos * 60
@@ -410,7 +566,8 @@ def correr(cfg: Config, progreso=print, gpu=False, f32=False):
     t_suma = 0.0
 
     def registra():
-        rel = sim.c / c_final if c_final > 0 else sim.c
+        c = sim.en_agua(sim.c)
+        rel = c / c_final if c_final > 0 else c
         serie["t_min"].append((sim.t - t_dosis) / 60)
         serie["cov"].append(float(rel.std(dtype=np.float64)))
         serie["c_min"].append(float(rel.min()))

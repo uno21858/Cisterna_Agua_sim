@@ -14,6 +14,8 @@ axial G1/2 (Ø13 interior), salida radial G1/2 con Ø8 interior, cuerpo de
 
 Supuestos (el doc no los da; cámbialos aquí o por CLI):
   - planta rectangular de 3.40 x 2.45 m (3.40 x 2.45 x 1.20 = 10.0 m3)
+  - Erick dice que la cisterna es redonda (forma="redonda"); el diámetro no está
+    medido: 3.26 m es el que da 10 m3 a 1.20 m de nivel
   - posición de la boca de la tapa, de la bomba de pozo y del llenado
   - inclinación del mástil: el dibujo no tiene lo horizontal a escala
   - curva de la bomba lineal entre (0, Hmax) y (Qmax, 0), medida con su
@@ -27,6 +29,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 LUGARES_DOSIS = ("llenado", "mastil")
+FORMAS = ("rectangular", "redonda")
 
 
 @dataclass
@@ -37,6 +40,10 @@ class Config:
     nivel: float = 1.20
     z_tapa: float = 1.35  # travesaño del que cuelga el mástil
     dx: float = 0.10  # tamaño objetivo de celda
+    # "redonda": cilindro de centro (D/2, D/2) dentro de la caja D x D; largo y ancho
+    # toman el valor del diámetro y se ignoran los que vengan.
+    forma: str = "rectangular"
+    diametro: float = 3.26  # supuesto: pi * 1.63^2 * 1.20 = 10.0 m3
 
     # Bomba de mezcla Mibee 12 V (ficha: 800 L/h, 5 m).
     q_max_lh: float = 800.0
@@ -79,15 +86,30 @@ class Config:
     cada_s: float = 10.0  # muestreo de la serie de tiempo
     cuadro_s: float = 60.0  # cuadros de la animación
 
+    def __post_init__(self):
+        if self.forma == "redonda":
+            self.largo = self.ancho = self.diametro
+
     # ---- geometría derivada ----
 
     @property
+    def redonda(self) -> bool:
+        return self.forma == "redonda"
+
+    @property
     def volumen_m3(self) -> float:
+        """Volumen geométrico del agua."""
+        if self.redonda:
+            return math.pi * (self.diametro / 2) ** 2 * self.nivel
         return self.largo * self.ancho * self.nivel
 
     def rumbo(self) -> tuple[float, float]:
-        """Dirección en planta del mástil: de la boca hacia la esquina opuesta."""
+        """Dirección en planta del mástil: de la boca hacia la esquina opuesta (redonda: hacia el centro)."""
         bx, by = self.boca
+        if self.redonda:
+            hx, hy = self.diametro / 2 - bx, self.diametro / 2 - by
+            n = math.hypot(hx, hy)
+            return (hx / n, hy / n) if n >= 1e-3 else (1.0, 0.0)
         ex = self.largo if bx < self.largo / 2 else 0.0
         ey = self.ancho if by < self.ancho / 2 else 0.0
         hx, hy = ex - bx, ey - by
@@ -135,8 +157,9 @@ class Config:
 
     def validar(self) -> None:
         errores = []
-        for nombre in ("largo", "ancho", "nivel", "dx", "q_max_lh", "h_max_m", "salida_mm", "boquilla_mm",
-                       "minutos", "dosis_ml"):
+        planta = ("diametro",) if self.redonda else ("largo", "ancho")
+        for nombre in planta + ("nivel", "dx", "q_max_lh", "h_max_m", "salida_mm", "boquilla_mm",
+                                "minutos", "dosis_ml"):
             if not getattr(self, nombre) > 0:
                 errores.append(f"{nombre} debe ser > 0")
         # en forma negada para que NaN también falle
@@ -151,11 +174,18 @@ class Config:
             errores.append(f"lugar_dosis debe ser uno de {LUGARES_DOSIS}")
         if not 0 < self.cfl <= 0.5:
             errores.append("cfl debe estar en (0, 0.5]")
+        if self.forma not in FORMAS:
+            errores.append(f"forma debe ser una de {FORMAS}")
         if errores:
             raise ValueError("; ".join(errores))
 
         # en z la malla usa max(4, ...) por sí sola, así que la regla solo aplica en planta
-        if min(self.largo, self.ancho) / self.dx < 4:
+        if self.redonda:
+            if self.diametro / self.dx < 8:
+                errores.append("dx muy grande: se necesitan al menos 8 celdas a lo ancho del diámetro")
+            if self.largo != self.diametro or self.ancho != self.diametro:
+                errores.append("con forma redonda largo y ancho son el diámetro (cambia diametro con dataclasses.replace)")
+        elif min(self.largo, self.ancho) / self.dx < 4:
             errores.append("dx muy grande: se necesitan al menos 4 celdas a lo largo y a lo ancho")
         zb = self.pos_bomba_xyz()[2]
         if self.nivel < zb + 0.10 - 1e-9:
@@ -168,8 +198,14 @@ class Config:
         puntos = {"bomba": self.pos_bomba_xyz(), "sonda ORP": self.punto_tubo(self.z_orp),
                   "pozo": self.pozo, "dosis": self.punto_dosis(),
                   "boca (sonda de superficie)": (self.boca[0], self.boca[1], self.nivel - 0.10)}
+        # en la redonda, a medio dx de la pared para que caiga en celdas de agua
+        r_max = self.diametro / 2 - 0.5 * self.dx
         for nombre, (x, y, z) in puntos.items():
-            if not (0 < x < self.largo and 0 < y < self.ancho and 0 < z < self.nivel):
+            if self.redonda:
+                dentro = math.hypot(x - self.diametro / 2, y - self.diametro / 2) <= r_max
+            else:
+                dentro = 0 < x < self.largo and 0 < y < self.ancho
+            if not (dentro and 0 < z < self.nivel):
                 errores.append(f"{nombre} ({x:.2f}, {y:.2f}, {z:.2f}) queda fuera del agua o de la cisterna")
         if errores:
             raise ValueError("; ".join(errores))
