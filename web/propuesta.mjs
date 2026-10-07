@@ -40,6 +40,8 @@ const ELEVACIONES = [-15, 0, 15];
 const TANGENCIAL = { pos: [2.96, 1.63], az: 90 };
 // Elegida con el tamizado: a 50 cm, horizontal, hacia el lado contrario al flotador visto desde el tubo.
 const RECOMENDADA = { lado: { az: -45, el: 0 }, pared: { az: 0, el: 0 } };
+// La alternativa que aleja la nube de la rejilla: hacia el flotador (la dirección probada más cercana) y +15.
+const HACIA_FLOTADOR = { lado: { az: 135, el: 15 }, pared: { az: 180, el: 15 } };
 
 const rad = (g) => (g * Math.PI) / 180;
 const r3 = (x) => (x == null || !Number.isFinite(x) ? x : Math.round(x * 1000) / 1000);
@@ -216,6 +218,8 @@ function plan(hechos) {
       consumo.push(caso({ tipo: "propuesta", llenado, az: m.az, el: m.el, consumo: q }));
       const b = menosPico(hechos, llenado);
       if (b.id !== m.id) consumo.push(caso({ tipo: "propuesta", llenado, az: b.az, el: b.el, consumo: q }));
+      const f = HACIA_FLOTADOR[llenado];
+      if (f.az !== b.az || f.el !== b.el) consumo.push(caso({ tipo: "propuesta", llenado, ...f, consumo: q }));
       consumo.push(caso({ tipo: "doc", llenado, consumo: q }));
       consumo.push(caso({ tipo: "tangencial", llenado, consumo: q }));
       consumo.push(caso({ tipo: "propuesta", llenado, az: m.az, el: m.el, consumo: q, sin_bomba: true }));

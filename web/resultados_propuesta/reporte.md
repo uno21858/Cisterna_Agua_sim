@@ -58,6 +58,7 @@ Con la casa usando 15 L/min desde que se echa el cloro:
 | sin bomba de mezcla | 33.5 | 4.1 % | 8.9 % | 19.52 | 2.5 |
 | tangencial junto a la pared | 8.5 | 3.4 % | 8.2 % | 15.25 | 2.2 |
 | propuesta az -45 el 0 | 11.3 | 2.9 % | 7.8 % | 13.75 | 1.7 |
+| propuesta az 135 el 15 | 19.2 | 2.1 % | 7.1 % | 3.74 | 1.2 |
 
 ## Llenado entre la bomba de pozo y la pared (1.08, 1.63)
 
