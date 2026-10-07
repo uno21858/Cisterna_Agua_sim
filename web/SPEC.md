@@ -29,6 +29,7 @@ Concentración de cloro en mg/L. Caudales de entrada en L/h o L/min según el no
 
 ```js
 export const DEFAULTS = {
+  forma: "rectangular", diametro: 3.26,   // diametro supuesto: 10 m3 a 1.20 m (ver "Cisterna redonda")
   largo: 3.40, ancho: 2.45, nivel: 1.20, z_tapa: 1.35, dx: 0.10,
   q_max_lh: 800, h_max_m: 5, salida_mm: 8, boquilla_mm: 8, k_salida: 1.0,
   boca: [1.20, 1.00], angulo_tubo: 60, z_bomba: 0.50, z_orp: 0.20,
@@ -81,15 +82,23 @@ Con consumo, stats().cov es desviación / media actual (sin consumo es igual a s
 ## API de solver.js
 
 ```js
-export const DEFAULTS
+export const DEFAULTS, FORMAS, TOL_PRESION (1e-8), MAX_IT_PRESION (300)
 export function validar(cfg)                       // lanza Error con todos los problemas
-export function geometria(cfg) -> { rumbo, punto_tubo(z), pos_bomba, dir_chorro, plano_chorro, punto_dosis, sondas }
+export function geometria(cfg) -> { rumbo, punto_tubo(z), pos_bomba, dir_chorro, plano_chorro, punto_dosis, sondas,
+                                    fuente_llenado, forma, centro: [cx, cy], radio (null en la rectangular),
+                                    volumen_m3 (geométrico: largo*ancho*nivel o pi R^2 nivel) }
 export function puntoOperacion(...) -> { q_m3s, q_lh, u_ms, m_m4s2, h_m }
 export function tiempoMezclaS(vol_m3, m)
 export class Cisterna {
   constructor(cfgParcial)         // mezcla con DEFAULTS, valida
   cfg, nx, ny, nz, dx, dy, dz, volCelda, bomba, t, cFinal (mg/L si mezcla perfecta, 0 antes de dosificar)
   u, v, w, c                      // Float64Array
+  redonda                         // forma === "redonda"
+  agua                            // Uint8Array(nx*ny), 1 si la columna i*ny+j es agua (en la rectangular, todo 1)
+  nAgua, volumenAgua              // celdas de agua y su volumen discreto nAgua*volCelda (m3)
+  p, tolPresion, presion          // redonda: presión guardada (arranque del siguiente paso), tolerancia del
+                                  // gradiente conjugado (atributo, no config) y { iteraciones, residuo, total,
+                                  // proyecciones } del último paso y acumulado; en la rectangular p = null
   dtFlujo()
   avanza(dt, { cloro = true, bomba = true } = {})
   correr(segundos, opts)          // varios pasos con dt estable; regresa pasos
@@ -179,3 +188,43 @@ vengan), centro `(D/2, D/2)`, radio `R = D/2`.
 10. **Visor**: planta circular a escala, fuera del círculo se pinta como muro; el corte lateral es la
    cuerda que pasa por la bomba (paredes en `cx ± sqrt(R² - (y - cy)²)`); en "editar cisterna" se
    elige forma y, si es redonda, diámetro en vez de largo y ancho. Las partículas no salen del agua.
+
+### Decisiones de la implementación (huecos de la lista de arriba)
+
+Resueltas en `web/solver.js` (commit "Motor JS: cisterna redonda ..."); Python debe seguirlas para la paridad.
+
+- **Consumo en la redonda**: `b = (div(u*) - s)/dt` (el punto 4 omite s). Sumidero, fuente y chorro del llenado
+  van con pesos solo en celdas de agua / caras w abiertas (punto 6), así que `s` sigue sumando 0 en el agua.
+- **Viscosidad**: Smagorinsky solo en celdas de agua (las derivadas centradas ven velocidad 0 en las secas, como
+  `np.gradient` en la caja); fuera del agua `nu = NU_AGUA` y no entra en `nuMax` (`dtFlujo`, `dtCloro`), porque
+  ninguna cara abierta la usa. Si Python toma `nu_c.max()` en toda la caja, en la práctica da el mismo paso: en 6
+  corridas de 5 min (chorro por defecto, al muro y rozando la pared; dx 0.2 y 0.1) el máximo siempre cayó en el
+  agua. Aun así la regla es "solo agua".
+- **Muestreo del cloro** (`muestrea("c")`, sondas, `corte`, `seccionChorro`): trilineal solo con las columnas de
+  agua del estencil 2x2 en planta, pesos renormalizados; si las 4 son agua es la trilineal de siempre. Sin esto,
+  una sonda válida a `R - 0.5·dx` lee hasta la mitad de lo real por los ceros del muro. Las velocidades usan la
+  trilineal simple (valen 0 en la pared, que es lo físico). Python debe hacer lo mismo en `muestrea` de campos de
+  centros para que las sondas, muestras y la sección den paridad.
+- **Sección del chorro**: en la redonda es la cuerda del círculo por la bomba (igual que Python).
+- **Difusión (punto 3)**: el vecino tangencial cerrado se escribe como fantasma `-u` (mismo número que "vale 0 y
+  se suma -u/h²"), con banderas por columna; las caras de la caja son el mismo caso.
+- **Validación**: `diametro/dx >= 8` y `R - 0.5·dx` usan el `dx` de la config, no el de la malla. El llenado se
+  valida con consumo y también cuando es el lugar de la dosis (como ya pasaba). `diametro` debe ser > 0 siempre.
+- **copiaEstado**: solo entre cisternas de la misma forma y malla; copia también `p`.
+- **Advección**: el punto de salida semi-lagrangiano se interpola en la caja completa (las caras cerradas valen 0),
+  igual que en Python.
+- **Tolerancia estricta** para la paridad: `sim.tolPresion = 1e-12` en JS (en Python, `TOL_CG`).
+
+Rendimiento medido en Node 22 (un hilo, 30 s de bomba antes de medir, luego dosis y 150 pasos completos):
+
+| caso | malla | ms por paso | iteraciones de GC por paso |
+|---|---|---|---|
+| rectangular 3.40 x 2.45, dx 0.10 | 34x24x12 | 5.1 | (DCT directa) |
+| rectangular 3.26 x 3.26, dx 0.10 | 33x33x12 | 6.6 | (DCT directa) |
+| redonda D 3.26, dx 0.10, arranque en caliente | 33x33x12 | 11.0 | 3.9 |
+| redonda D 3.26, dx 0.10, arranque en frío (p = 0) | 33x33x12 | 15.7 | 7.0 |
+| redonda D 3.26, dx 0.05, arranque en caliente | 65x65x24 | 97 | 3.1 |
+
+De los 11 ms de la redonda, 6.4 son la presión y casi todo es la DCT del precondicionador (1.45 ms por
+aplicación); aplicar `-A` cuesta 0.06 ms. Las caras y celdas secas no se calculan en advección, difusión y
+cloro. Cero asignaciones por paso: todos los vectores del gradiente conjugado están prealocados.
