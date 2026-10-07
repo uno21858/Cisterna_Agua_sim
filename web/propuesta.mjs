@@ -42,12 +42,12 @@ const rad = (g) => (g * Math.PI) / 180;
 const r3 = (x) => (x == null || !Number.isFinite(x) ? x : Math.round(x * 1000) / 1000);
 
 export function caso(p) {
-  const c = { z: 0.5, el: 0, consumo: 0, bomba_min: 45, minutos: 90, ...p };
-  const cfg = { ...BASE, llenado: LLENADOS[c.llenado], lugar_dosis: "llenado", consumo_lpm: c.consumo };
+  const c = { z: 0.5, el: 0, consumo: 0, bomba_min: 45, minutos: 90, dx: 0.10, daz: 0, ...p };
+  const cfg = { ...BASE, dx: c.dx, llenado: LLENADOS[c.llenado], lugar_dosis: "llenado", consumo_lpm: c.consumo };
   if (c.tipo === "propuesta") {
     // la bomba va pegada al tubo, ~6 cm del eje, del lado hacia donde escupe
     cfg.pos_bomba = [MASTIL[0] + 0.06 * Math.cos(rad(c.az)), MASTIL[1] + 0.06 * Math.sin(rad(c.az)), c.z];
-    cfg.azimut = c.az;
+    cfg.azimut = c.az + c.daz; // daz: error de puntería (la bomba sigue en su lugar)
     cfg.elevacion = c.el;
   } else if (c.tipo === "doc") {
     // mástil diagonal a 60 grados desde la boca hacia el lado opuesto al pozo, chorro a lo largo del tubo
@@ -59,7 +59,8 @@ export function caso(p) {
   }
   if (c.sin_bomba) c.bomba_min = 0;
   c.id = [c.tipo, c.llenado, `z${Math.round(c.z * 100)}`, c.tipo === "propuesta" ? `a${c.az}_e${c.el}` : "",
-    c.consumo ? `q${c.consumo}` : "", c.sin_bomba ? "sinbomba" : ""].filter(Boolean).join("_");
+    c.consumo ? `q${c.consumo}` : "", c.sin_bomba ? "sinbomba" : "", c.dx !== 0.10 ? `dx${Math.round(c.dx * 100)}` : "",
+    c.daz ? `d${c.daz > 0 ? "+" : ""}${c.daz}` : ""].filter(Boolean).join("_");
   c.cfg = cfg;
   validar(cfg);
   return c;
@@ -135,7 +136,7 @@ export function simula(c) {
   const i45 = t.findIndex((x) => x >= 45 - 1e-9);
   return {
     id: c.id, tipo: c.tipo, llenado: c.llenado, z: c.z, az: c.az ?? null, el: c.el, consumo: c.consumo,
-    sin_bomba: !!c.sin_bomba,
+    sin_bomba: !!c.sin_bomba, dx: c.dx, daz: c.daz,
     pos_bomba: sim.geo.pos_bomba.map(r3),
     t95: desde(t, cov.map((v) => v > 0.05)),
     t10: desde(t, cmin.map((v, q) => v < 0.9 || cmax[q] > 1.1)),
@@ -152,13 +153,14 @@ export function simula(c) {
 
 // ---- plan por etapas (cada etapa elige con lo ya corrido) ----
 
+const nominal = (r) => (r.dx ?? 0.10) === 0.10 && !r.daz;
 const costo = (r) => (r.t95 ?? 90 + 100 * (r.cov45 ?? 1)) + 20 * Math.max(0, r.corto - 1.5);
 
 // Con el llenado entre el pozo y la pared, az y -az son el mismo caso en espejo: cuenta una vez.
 function mejores(hechos, llenado, n) {
   const vistos = new Set();
   return [...hechos.values()]
-    .filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo)
+    .filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo && nominal(r))
     .sort((a, b) => costo(a) - costo(b) || Math.abs(a.az) - Math.abs(b.az) || b.az - a.az)
     .filter((r) => {
       const k = llenado === "pared" ? `${Math.abs(r.az)}|${r.el}` : `${r.az}|${r.el}`;
@@ -179,7 +181,7 @@ function plan(hechos) {
   etapas.push(["tamizado (8 direcciones x 3 inclinaciones a 50 cm, y las referencias)", tamizado]);
   const listo = tamizado.every((c) => hechos.has(c.id));
   if (!listo) return etapas;
-  const alturas = [], consumo = [];
+  const alturas = [], consumo = [], firmeza = [];
   for (const llenado of Object.keys(LLENADOS)) {
     const top = mejores(hechos, llenado, 2);
     for (const r of top) for (const z of [0.35, 0.65, 0.8]) alturas.push(caso({ tipo: "propuesta", llenado, az: r.az, el: r.el, z }));
@@ -190,9 +192,14 @@ function plan(hechos) {
       consumo.push(caso({ tipo: "tangencial", llenado, consumo: q }));
       consumo.push(caso({ tipo: "propuesta", llenado, az: m.az, el: m.el, consumo: q, sin_bomba: true }));
     }
+    // la mejor y su versión horizontal con celdas de 9 y 11 cm y la puntería ±5 grados
+    for (const el of [...new Set([m.el, 0])]) {
+      for (const v of [{ dx: 0.09 }, { dx: 0.11 }, { daz: -5 }, { daz: 5 }]) firmeza.push(caso({ tipo: "propuesta", llenado, az: m.az, el, ...v }));
+    }
   }
   etapas.push(["alturas de las 2 mejores direcciones por llenado", alturas]);
   etapas.push(["con la casa usando 15 L/min desde la dosis", consumo]);
+  etapas.push(["firmeza de la mejor (malla y puntería)", firmeza]);
   return etapas;
 }
 
@@ -273,14 +280,14 @@ function reporte(hechos) {
     L.push("", "Detalle (t95 / ±10 % en min, pico, rapidez máxima en el fondo, giro medio y rapidez media del agua en cm/s):", "",
       "| caso | t95 | ±10 % | pico | fondo m/s | giro cm/s | rapidez cm/s |", "|---|---|---|---|---|---|---|");
     const fila = (nombre, r) => L.push(`| ${nombre} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${r.vf_med} | ${cm(r.giro)} | ${cm(r.rapidez)} |`);
-    const props = todos.filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo)
+    const props = todos.filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo && nominal(r))
       .sort((a, b) => costo(a) - costo(b));
     for (const r of props.slice(0, 4)) fila(`propuesta az ${r.az} el ${r.el}`, r);
     const ref = (tipo) => hechos.get(caso({ tipo, llenado }).id);
     const d = ref("doc"), ta = ref("tangencial");
     if (d) fila("diseño del doc (mástil a 60°, chorro -60°)", d);
     if (ta) fila("tangencial junto a la pared", ta);
-    const alt = todos.filter((r) => r.tipo === "propuesta" && r.llenado === llenado && !r.consumo && r.z !== 0.5);
+    const alt = todos.filter((r) => r.tipo === "propuesta" && r.llenado === llenado && !r.consumo && r.z !== 0.5 && nominal(r));
     if (alt.length) {
       L.push("", "Alturas (t95 / ±10 %):", "");
       const dirs = [...new Set(alt.map((r) => `${r.az}|${r.el}`))];
@@ -291,6 +298,19 @@ function reporte(hechos) {
           return r ? `z ${z}: ${fmt(r.t95)} / ${fmt(r.t10)}` : "";
         });
         L.push(`- az ${az} el ${el}: ${celdas.filter(Boolean).join("; ")}`);
+      }
+    }
+    const fir = todos.filter((r) => r.llenado === llenado && !nominal(r));
+    if (fir.length) {
+      L.push("", "Firmeza (t95 / ±10 % en min; nominal: celdas de 10 cm y puntería exacta):", "");
+      for (const k of [...new Set(fir.map((r) => `${r.az}|${r.el}`))]) {
+        const [az, el] = k.split("|").map(Number);
+        const vars = [["nominal", {}], ["celdas de 9 cm", { dx: 0.09 }], ["celdas de 11 cm", { dx: 0.11 }], ["az -5", { daz: -5 }], ["az +5", { daz: 5 }]];
+        const rs = vars.map(([n, v]) => [n, hechos.get(caso({ tipo: "propuesta", llenado, az, el, ...v }).id)]).filter(([, r]) => r);
+        const ts = rs.map(([, r]) => r.t95).filter((x) => x != null);
+        const media = ts.reduce((a, b) => a + b, 0) / ts.length;
+        const desv = Math.sqrt(ts.reduce((a, b) => a + (b - media) ** 2, 0) / Math.max(1, ts.length - 1));
+        L.push(`- az ${az} el ${el}: ${rs.map(([n, r]) => `${n} ${fmt(r.t95)} / ${fmt(r.t10)}`).join("; ")}. t95 ${media.toFixed(1)} ± ${desv.toFixed(1)}`);
       }
     }
     const con = todos.filter((r) => r.llenado === llenado && r.consumo);
