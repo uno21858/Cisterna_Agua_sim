@@ -234,3 +234,27 @@ De los 11 ms de la redonda, 6.4 son la presión y casi todo es la DCT del precon
 aplicación); aplicar `-A` cuesta 0.06 ms. Con la caja llena como máscara el gradiente conjugado converge en una
 iteración y da la proyección de la DCT directa a 3e-16 (el operador, el precondicionador y la corrección cuadran). Las caras y celdas secas no se calculan en advección, difusión y
 cloro. Cero asignaciones por paso: todos los vectores del gradiente conjugado están prealocados.
+
+### Lado Python (`cisterna_sim/`)
+
+- **Precisión simple**: `TOL_CG` es 1e-8 en f64 (punto 4) y 1e-6 en f32. En f32 apretar más no cambia la solución
+  (manda el redondeo: contra f64, c difiere 4e-7 con 1e-6 y 2e-7 con 1e-7 o menos) y solo cuesta iteraciones. JS
+  solo corre en f64. Con `sim.tol_cg = 1e-12` converge en ~10 iteraciones.
+- **Agua quieta**: si `max|b| = 0` exacto, `p = 0` sin iterar (igual que JS); con la p anterior distinta de 0 nunca
+  se cumpliría `max|r| <= 0`.
+- **Interpolación con agua**: en `muestrea`, cualquier campo de centros (`off == OFF_C`) usa las columnas de agua;
+  las caras, la trilineal simple.
+- **Para un caso redondo en `gen_ref.py`**: estadísticas con `sim.en_agua(sim.c)` y
+  `c_final = masa / (sim.volumen_m3 · 1000)` (`sim.volumen_m3` es el discreto, `cfg.volumen_m3` el geométrico).
+- Sin consumo (no existe en Python).
+
+Rendimiento en CPU con numpy (un hilo, 30 pasos antes de medir y 150 medidos con cloro, chorro por defecto):
+
+| caso | malla | f64 ms/paso | f32 ms/paso | iteraciones de GC (f64 / f32) |
+|---|---|---|---|---|
+| rectangular 3.40 x 2.45, dx 0.10 | 34x24x12 | 17.7 | 10.9 | (DCT directa) |
+| redonda D 3.26, dx 0.10 | 33x33x12 | 27.1 | 14.5 | 4.1 / 1.4 |
+
+De los 27.1 ms, 3.4 son la presión (0.40 ms por aplicación del precondicionador); el resto escala con las celdas
+de la caja, que en Python sí se calculan aunque estén secas. Los productos punto van con `(a * b).sum()`: el
+`ddot` de OpenBLAS se reparte en hilos con 13 mil celdas y subía el paso a 33.5 ms.
