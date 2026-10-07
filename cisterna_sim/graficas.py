@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-
 import matplotlib
 
 matplotlib.use("Agg")
@@ -102,20 +100,6 @@ def _ejes_planta(ax, sim):
         ax.set_ylabel("ancho (m)")
 
 
-def _peso_seccion(sim):
-    """Fracción de agua que ve la interpolación en el corte; en la pared redonda baja de 1."""
-    solo_agua = copy.copy(sim)
-    solo_agua.c = sim.agua
-    return solo_agua.seccion_chorro("c")[2]
-
-
-def _seccion_c(sim, sec, peso):
-    """Cloro del corte sin el halo de ceros de las celdas secas que toca la interpolación."""
-    if not sim.redonda:
-        return sec
-    return np.ma.masked_where(peso < 0.05, sec / np.maximum(peso, 0.05))
-
-
 def _titulo_corte(sim, texto):
     return texto + (" (cuerda del círculo)" if sim.redonda else "")
 
@@ -173,11 +157,9 @@ def animar(sim, cuadros, ruta, fps=6):
     x = (np.arange(sim.nx) + 0.5) * sim.dx
     y = (np.arange(sim.ny) + 0.5) * sim.dy
     vmax = 2.0 * sim.c_final
-    peso = _peso_seccion(sim) if sim.redonda else None
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4.2), gridspec_kw={"width_ratios": [1.45, 1]},
                                    layout="constrained")
-    im1 = ax1.pcolormesh(s, z, _seccion_c(sim, cuadros[0]["seccion"], peso), cmap=AZUL, vmin=0, vmax=vmax,
-                         shading="auto")
+    im1 = ax1.pcolormesh(s, z, cuadros[0]["seccion"], cmap=AZUL, vmin=0, vmax=vmax, shading="auto")
     im2 = ax2.pcolormesh(x, y, _planta(sim, cuadros[0]["planta"]), cmap=AZUL, vmin=0, vmax=vmax, shading="auto")
     for ax in (ax1, ax2):
         ax.set_aspect("equal")
@@ -197,7 +179,7 @@ def animar(sim, cuadros, ruta, fps=6):
 
     def dibuja(i):
         q = cuadros[i]
-        im1.set_array(_seccion_c(sim, q["seccion"], peso).ravel())
+        im1.set_array(q["seccion"].ravel())
         im2.set_array(_planta(sim, q["planta"]).ravel())
         titulo.set_text(f"t = {q['t_min']:4.0f} min   CoV = {q['cov']:.2f}")
         return im1, im2, titulo

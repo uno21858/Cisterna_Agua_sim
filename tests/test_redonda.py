@@ -113,6 +113,20 @@ def test_chorro_empuja_en_su_direccion():
     assert vel @ d > 0
 
 
+def test_cloro_junto_a_la_pared_se_interpola_solo_con_agua():
+    sim = Cisterna(_cfg())
+    sim.c[:] = 0.75 * sim.agua
+    r = D / 2 - 0.05
+    for ang in np.linspace(0, 2 * math.pi, 17):
+        assert sim.valor_sonda((D / 2 + r * math.cos(ang), D / 2 + r * math.sin(ang), 0.5)) == pytest.approx(0.75)
+    assert np.allclose(sim.seccion_chorro("c")[2], 0.75)
+    # lejos de la pared es la trilineal de siempre
+    sim.c[:] = np.random.default_rng(1).random(sim.c.shape) * sim.agua
+    pts = [np.array([1.37, 1.9]), np.array([1.71, 1.2]), np.array([0.33, 1.07])]
+    plana = solver._trilineal(sim.c, pts[0] / sim.dx - 0.5, pts[1] / sim.dy - 0.5, pts[2] / sim.dz - 0.5)
+    assert np.array_equal(sim.muestrea(sim.c, solver.OFF_C, *pts), plana)
+
+
 def test_rumbo_hacia_el_centro():
     cfg = _cfg(boca=(1.20, 1.00))
     esperado = np.array([D / 2 - 1.20, D / 2 - 1.00])

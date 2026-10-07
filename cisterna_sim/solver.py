@@ -140,6 +140,32 @@ def _trilineal(a: np.ndarray, fi, fj, fk) -> np.ndarray:
     return (c00 * (1 - tj) + c01 * tj) * (1 - ti) + (c10 * (1 - tj) + c11 * tj) * ti
 
 
+def _trilineal_agua(a: np.ndarray, col, fi, fj, fk) -> np.ndarray:
+    """Trilineal de un campo de centros con solo las columnas de agua (col, nx x ny), pesos
+    renormalizados: junto a la pared redonda el muro no cuenta como agua sin cloro."""
+    xp = _xp(a)
+    nx, ny, nz = a.shape
+    fi = xp.clip(fi, 0, nx - 1)
+    fj = xp.clip(fj, 0, ny - 1)
+    fk = xp.clip(fk, 0, nz - 1)
+    i0 = xp.minimum(fi.astype(np.intp), nx - 2)
+    j0 = xp.minimum(fj.astype(np.intp), ny - 2)
+    k0 = xp.minimum(fk.astype(np.intp), nz - 2)
+    ti, tj, tk = fi - i0.astype(fi.dtype), fj - j0.astype(fj.dtype), fk - k0.astype(fk.dtype)
+    f, m = a.ravel(), col.ravel()
+    s = sp = n = 0
+    for di, wi in ((0, 1 - ti), (1, ti)):
+        for dj, wj in ((0, 1 - tj), (1, tj)):
+            q = (i0 + di) * ny + j0 + dj
+            peso = wi * wj * m[q]
+            b = q * nz + k0
+            s = s + peso * (f[b] * (1 - tk) + f[b + 1] * tk)
+            sp = sp + peso
+            n = n + m[q]
+    parcial = xp.where(sp > 0, s / xp.where(sp > 0, sp, 1), 0)
+    return xp.where(n == 4, _trilineal(a, fi, fj, fk), parcial)
+
+
 def _gauss_normalizado(px, py, pz, centro, sigma, mascara=None) -> np.ndarray:
     r2 = (px - centro[0]) ** 2 + (py - centro[1]) ** 2 + (pz - centro[2]) ** 2
     w = _xp(px).exp(-r2 / (2 * sigma**2))
@@ -231,6 +257,7 @@ class Cisterna:
             abiertas.append(m)
         self.n_agua = int(agua.sum())
         self.agua = xp.asarray(agua, dtype=dt)
+        self._col_agua = xp.asarray(col, dtype=dt)
         self.abierta = tuple(xp.asarray(m, dtype=dt) for m in abiertas)
         if not self.redonda:
             return
@@ -287,7 +314,11 @@ class Cisterna:
         return fuerzas
 
     def muestrea(self, a, off, x, y, z):
-        """Interpolación trilineal de un arreglo en puntos físicos."""
+        """Interpolación trilineal de un arreglo en puntos físicos. En la redonda los campos de
+        centros (el cloro) usan solo las columnas de agua; las velocidades sí valen 0 en la pared."""
+        if self.redonda and off == OFF_C:
+            return _trilineal_agua(a, self._col_agua, x / self.dx - off[0], y / self.dy - off[1],
+                                   z / self.dz - off[2])
         return _trilineal(a, x / self.dx - off[0], y / self.dy - off[1], z / self.dz - off[2])
 
     def velocidad_en(self, x, y, z):
