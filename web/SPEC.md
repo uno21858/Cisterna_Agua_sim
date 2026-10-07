@@ -223,8 +223,10 @@ Rendimiento medido en Node 22 (un hilo, 30 s de bomba antes de medir, luego dosi
 | rectangular 3.26 x 3.26, dx 0.10 | 33x33x12 | 6.6 | (DCT directa) |
 | redonda D 3.26, dx 0.10, arranque en caliente | 33x33x12 | 11.0 | 3.9 |
 | redonda D 3.26, dx 0.10, arranque en frío (p = 0) | 33x33x12 | 15.7 | 7.0 |
-| redonda D 3.26, dx 0.05, arranque en caliente | 65x65x24 | 97 | 3.1 |
+| redonda D 3.26, dx 0.05, arranque en caliente (10 s antes, 30 pasos) | 65x65x24 | 97 | 3.1 |
+| rectangular 3.40 x 2.45, dx 0.05 (10 s antes, 30 pasos) | 68x49x24 | 47 | (DCT directa) |
 
 De los 11 ms de la redonda, 6.4 son la presión y casi todo es la DCT del precondicionador (1.45 ms por
-aplicación); aplicar `-A` cuesta 0.06 ms. Las caras y celdas secas no se calculan en advección, difusión y
+aplicación); aplicar `-A` cuesta 0.06 ms. Con la caja llena como máscara el gradiente conjugado converge en una
+iteración y da la proyección de la DCT directa a 3e-16 (el operador, el precondicionador y la corrección cuadran). Las caras y celdas secas no se calculan en advección, difusión y
 cloro. Cero asignaciones por paso: todos los vectores del gradiente conjugado están prealocados.
