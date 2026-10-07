@@ -1,9 +1,12 @@
 // Pruebas y capturas del visor con Playwright (Chromium sin GPU).
 // Uso: npx http-server web -p 8080 -c-1 (en otra terminal) y luego
-//   node web/capturas.mjs               capturas en web/test/capturas: escritorio y teléfono, claro y oscuro
-//   node web/capturas.mjs controles     arrastres, sliders, editar cisterna, corte, velocidad, pausa, reiniciar,
-//                                       y los casos de la revisión del visor (config rechazada, dosis, serie larga)
-//   node web/capturas.mjs rotulos       busca rótulos encimados en varias configuraciones y anchos
+//   node web/capturas.mjs               capturas en web/test/capturas: escritorio y teléfono, claro y oscuro (la
+//                                       cisterna redonda de Erick) y la rectangular del documento en escritorio
+//   node web/capturas.mjs controles     arrastres, sliders, editar cisterna (forma, diámetro, medidas), corte,
+//                                       velocidad, pausa, reiniciar, y los casos de la revisión
+//   node web/capturas.mjs revision      casos de la revisión del visor (config rechazada, dosis, serie larga) y de
+//                                       la redonda (cloro y partículas solo en el agua, cuerda del corte, rayo)
+//   node web/capturas.mjs rotulos       rótulos encimados en varias configuraciones redondas y rectangulares y anchos
 //   node web/capturas.mjs rendimiento   cuadros por segundo, costo por cuadro y velocidad de la simulación
 //   node web/capturas.mjs contrato      reglas del artifact: esqueleto, temas, foco, movimiento reducido, 400 px
 //   node web/capturas.mjs todo
@@ -21,6 +24,17 @@ const salida = join(dirname(fileURLToPath(import.meta.url)), "test", "capturas")
 const modo = process.argv[2] ?? "capturas";
 const navegador = await chromium.launch();
 let fallas = 0;
+
+// El diseño del documento (rectangular, mástil a 60°) y la cisterna de Erick (los DEFAULTS).
+const RECT_DOC = {
+  forma: "rectangular", largo: 3.4, ancho: 2.45, boca: [1.2, 1.0], pozo: [0.9, 1.0, 0.45], llenado: [0.25, 1.2, 1.1],
+  angulo_tubo: 60, azimut: null, elevacion: null, pos_bomba: null, z_bomba: 0.5, lugar_dosis: "llenado", nivel: 1.2,
+};
+const REDONDA = {
+  forma: "redonda", diametro: 3.26, boca: [1.63, 1.63], pozo: [1.33, 1.63, 0.45], llenado: [1.33, 1.88, 1.1],
+  angulo_tubo: 90, azimut: 0, elevacion: 0, pos_bomba: null, z_bomba: 0.5, lugar_dosis: "llenado", nivel: 1.2,
+};
+const radio = (p, k) => Math.hypot(p[0] - k.cx, p[1] - k.cy);
 
 async function abre({ w, h, dpr = 1, movil = false, tema = "light", antes = null }) {
   const ctx = await navegador.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: dpr, isMobile: movil, hasTouch: movil });
@@ -79,10 +93,15 @@ async function capturas() {
     { nombre: "escritorio_oscuro", w: 1280, h: 800, tema: "dark" },
     { nombre: "telefono_claro", w: 400, h: 860, dpr: 2, tema: "light", movil: true },
     { nombre: "telefono_oscuro", w: 400, h: 860, dpr: 2, tema: "dark", movil: true },
+    { nombre: "escritorio_rectangular", w: 1280, h: 800, tema: "light", cfg: RECT_DOC },
   ];
   const reporte = [];
   for (const caso of casos) {
     const { ctx, page, errores } = await abre({ ...caso, antes: vigilaLargas });
+    if (caso.cfg) {
+      await page.evaluate((c) => window.visor.aplica(c), caso.cfg);
+      await page.waitForFunction(() => window.visor.sim.redonda === false && window.visor.sim.t > 3, null, { timeout: 60000 });
+    }
     // Estado de trabajo: flujo desarrollado y el cloro a medio mezclar (unos 10 min tras la dosis).
     await page.selectOption("#velocidad", "120");
     await page.waitForFunction(() => window.visor.sim.t > 600, null, { timeout: 120000 });
@@ -225,10 +244,18 @@ async function controles(caso) {
   b = await st();
   revisa("reiniciar", b.id > a.id && b.t < a.t && b.corridas === Math.min(12, a.corridas + 1), `t ${a.t.toFixed(0)} a ${b.t.toFixed(0)} s`);
 
-  // Editar la cisterna
+  // Editar la cisterna: la redonda pide el diámetro; las piezas no salen del círculo
+  const medida = async (id, valor) => {
+    await page.locator(`#${id}`).scrollIntoViewIfNeeded();
+    await page.fill(`#${id}`, valor);
+    await page.press(`#${id}`, "Enter");
+    await page.locator(`#${id}`).blur();
+    await espera(2500);
+  };
+  const malla = () => ev(() => [window.visor.sim.nx, window.visor.sim.ny, window.visor.sim.redonda]);
   await page.locator("#editar").scrollIntoViewIfNeeded();
   await page.check("#editar");
-  revisa("editar muestra las medidas", await page.isVisible("#largo"));
+  revisa("editar muestra la forma y el diámetro", await page.isVisible("#forma") && await page.isVisible("#diametro") && !(await page.isVisible("#largo")));
   await ev(() => scrollTo(0, 0));
   a = await st();
   await arrastra("planta", "boca", 30, 10);
@@ -238,17 +265,37 @@ async function controles(caso) {
   revisa("arrastrar la boca", b.cfg.boca[0] !== a.cfg.boca[0], `${a.cfg.boca} a ${b.cfg.boca}`);
   revisa("arrastrar la bomba de pozo", b.cfg.pozo[1] !== a.cfg.pozo[1], `${a.cfg.pozo} a ${b.cfg.pozo}`);
   revisa("arrastrar el flotador", b.cfg.llenado[1] !== a.cfg.llenado[1], `${a.cfg.llenado} a ${b.cfg.llenado}`);
-  await page.locator("#largo").scrollIntoViewIfNeeded();
-  await page.fill("#largo", "300");
-  await page.press("#largo", "Enter");
-  await page.locator("#largo").blur();
-  await espera(2500);
+  // Lo bastante para salir del círculo sin salir de la ventana (a 400 px el círculo llega casi al borde).
+  await arrastra("planta", "pozo", -170, 0);
+  await arrastra("planta", "boca", 0, 250);
+  await espera(1500);
   b = await st();
-  const malla = await ev(() => window.visor.sim.nx);
-  revisa("cambiar el largo rehace la malla", Math.abs(b.cfg.largo - 3) < 1e-9 && malla === 30, `nx ${malla}`);
+  let k = await ev(() => window.visor.caja);
+  revisa("arrastrar fuera del círculo deja las piezas adentro",
+    radio(b.cfg.pozo, k) <= k.R - 0.1 && radio(b.cfg.pozo, k) > k.R - 0.13 && radio(b.cfg.boca, k) <= k.R - 0.42 && !(await page.textContent("#avisos")).includes("No se aplicó"),
+    `pozo a ${radio(b.cfg.pozo, k).toFixed(3)} m del centro, boca a ${radio(b.cfg.boca, k).toFixed(3)} (R ${k.R})`);
+  await medida("diametro", "300");
+  b = await st();
+  k = await ev(() => window.visor.caja);
+  let nm = await malla();
+  revisa("cambiar el diámetro rehace la malla y recorre las piezas", Math.abs(b.cfg.diametro - 3) < 1e-9 && nm[0] === 30 && nm[1] === 30 && nm[2]
+    && radio(b.cfg.pozo, k) <= k.R - 0.1, `malla ${nm}, pozo a ${radio(b.cfg.pozo, k).toFixed(3)} m del centro`);
+  await page.selectOption("#forma", "rectangular");
+  await espera(2500);
+  nm = await malla();
+  revisa("forma rectangular: largo y ancho, malla de la caja", await page.isVisible("#largo") && !(await page.isVisible("#diametro")) && nm[0] === 34 && nm[1] === 24 && nm[2] === false,
+    `malla ${nm}`);
+  revisa("el corte vuelve a ser a lo largo", (await page.textContent("label[for=corte-largo]")) === "A lo largo");
+  await medida("largo", "300");
+  b = await st();
+  nm = await malla();
+  revisa("cambiar el largo rehace la malla", Math.abs(b.cfg.largo - 3) < 1e-9 && nm[0] === 30, `nx ${nm[0]}`);
   await page.click("#medidas-doc");
   await espera(2500);
-  revisa("regresar a las medidas supuestas", (await st()).cfg.largo === 3.4 && (await ev(() => window.visor.sim.nx)) === 34);
+  nm = await malla();
+  b = await st();
+  revisa("regresar a las medidas supuestas: la redonda de 3.26 m", b.cfg.forma === "redonda" && b.cfg.diametro === 3.26 && nm[0] === 33 && nm[2] === true
+    && (await page.inputValue("#forma")) === "redonda", `malla ${nm}`);
   await page.uncheck("#editar");
 
   // Capas, planta a una altura y dosis donde se toca
@@ -261,10 +308,17 @@ async function controles(caso) {
   await page.click("label[for=planta-prom]");
   await page.click("label[for=lugar-clic]");
   await ev(() => scrollTo(0, 0));
+  await espera(300);
   const caja = await page.locator("#c-planta").boundingBox();
-  await page.mouse.click(caja.x + caja.width * 0.7, caja.y + caja.height * 0.4);
+  // Afuera del círculo (la esquina de la caja) no cuenta; adentro sí.
+  let [qx, qy] = await ev(() => window.visor.aPantalla(0.15, 0.15));
+  await page.mouse.click(caja.x + qx, caja.y + qy);
   b = await st();
-  revisa("tocar la planta pone el punto de la dosis", Array.isArray(b.cfg.lugar_dosis), JSON.stringify(b.cfg.lugar_dosis));
+  revisa("tocar fuera del agua no pone la dosis", !Array.isArray(b.cfg.lugar_dosis), JSON.stringify(b.cfg.lugar_dosis));
+  [qx, qy] = await ev(() => window.visor.aPantalla(2.3, 2.0));
+  await page.mouse.click(caja.x + qx, caja.y + qy);
+  b = await st();
+  revisa("tocar la planta pone el punto de la dosis", Array.isArray(b.cfg.lugar_dosis) && Math.abs(b.cfg.lugar_dosis[0] - 2.3) < 0.02, JSON.stringify(b.cfg.lugar_dosis));
 
   const ch = await ev(() => window.visor.choques());
   revisa("rótulos sin choques", !ch.planta.length && !ch.corte.length, JSON.stringify(ch));
@@ -370,8 +424,10 @@ async function revision() {
     await page.waitForTimeout(1500);
     await page.click("label[for=lugar-clic]");
     await page.evaluate(() => scrollTo(0, 0));
+    await page.waitForTimeout(300);
     const caja = await page.locator("#c-planta").boundingBox();
-    await page.mouse.click(caja.x + caja.width * 0.7, caja.y + caja.height * 0.4);
+    const [qx, qy] = await page.evaluate(() => window.visor.aPantalla(2.3, 2.0));
+    await page.mouse.click(caja.x + qx, caja.y + qy);
     await page.fill("#nivel", "120");
     await page.waitForTimeout(1500);
     await page.click("#echar");
@@ -411,15 +467,28 @@ async function revision() {
     await ctx.close();
   }
   {
-    // Achicar la cisterna: la boca se recorre y el cambio se aplica.
+    // Achicar la cisterna: la boca, el pozo y el flotador se recorren y el cambio se aplica.
     const { ctx, page, errores } = await abre({ w: 1280, h: 900, antes: espiaMotor });
     await page.check("#editar");
-    await page.fill("#largo", "110");
-    await page.press("#largo", "Enter");
-    await page.locator("#largo").blur();
-    await page.waitForTimeout(2500);
-    const r = await page.evaluate(() => ({ L: window.visor.sim.L, boca: window.visor.cfg.boca }));
-    revisa("achicar la cisterna recorre la boca adentro", r.L === 1.1 && r.boca[0] <= 0.8, JSON.stringify(r));
+    const medida = async (id, valor) => {
+      await page.fill(`#${id}`, valor);
+      await page.press(`#${id}`, "Enter");
+      await page.locator(`#${id}`).blur();
+      await page.waitForTimeout(2500);
+    };
+    await page.evaluate(() => window.visor.aplica({ pos_bomba: [2.6, 2.3, 0.5] }));
+    await medida("diametro", "110");
+    let r = await page.evaluate(() => ({ L: window.visor.sim.L, cfg: structuredClone(window.visor.cfg), k: window.visor.caja }));
+    revisa("achicar la redonda recorre las piezas adentro", r.L === 1.1 && radio(r.cfg.boca, r.k) <= r.k.R - 0.42
+      && ["pozo", "llenado", "pos_bomba"].every((p) => radio(r.cfg[p], r.k) <= r.k.R - 0.1),
+      ["boca", "pozo", "llenado", "pos_bomba"].map((p) => `${p} ${radio(r.cfg[p], r.k).toFixed(3)}`).join(", ") + ` de R ${r.k.R}`);
+    await page.click("#medidas-doc");
+    await page.waitForTimeout(500);
+    await page.selectOption("#forma", "rectangular");
+    await page.waitForTimeout(500);
+    await medida("largo", "110");
+    r = await page.evaluate(() => ({ L: window.visor.sim.L, boca: window.visor.cfg.boca, redonda: window.visor.sim.redonda }));
+    revisa("achicar la rectangular recorre la boca adentro", r.L === 1.1 && r.boca[0] <= 0.8 && r.redonda === false, JSON.stringify(r));
     // Corrida muy larga: 200 mil muestras no truenan la gráfica.
     await page.click("#play");
     await page.waitForTimeout(500);
@@ -437,6 +506,39 @@ async function revision() {
     revisa("200 mil muestras: la serie se diezma y la gráfica sigue", typeof n === "number" && n <= 3000 && !errores.length, `${n} muestras ${errores.join(" | ")}`);
     await ctx.close();
   }
+  {
+    // La redonda: cloro y partículas solo en el agua, el corte es la cuerda por la bomba y el chorro pega
+    // en la pared del cilindro.
+    const { ctx, page, errores } = await abre({ w: 1280, h: 900 });
+    await page.selectOption("#velocidad", "120");
+    await page.waitForTimeout(4000);
+    const pixel = (x, y) => page.evaluate(([x, y]) => {
+      const [px, py] = window.visor.aPantalla(x, y), c = document.getElementById("c-planta");
+      const d = c.getContext("2d").getImageData(Math.round(px * c.width / c.clientWidth), Math.round(py * c.height / c.clientHeight), 1, 1).data;
+      const papel = getComputedStyle(document.documentElement).getPropertyValue("--papel").trim().slice(1);
+      return { rgb: [...d.slice(0, 3)], papel: [0, 2, 4].map((i) => parseInt(papel.slice(i, i + 2), 16)) };
+    }, [x, y]);
+    const esquina = await pixel(0.12, 0.12), centro = await pixel(1.63, 2.6);
+    const igual = (a, b) => a.every((q, i) => Math.abs(q - b[i]) <= 2);
+    revisa("el cloro se pinta solo dentro del círculo", igual(esquina.rgb, esquina.papel) && !igual(centro.rgb, centro.papel), JSON.stringify({ esquina, centro }));
+    for (const corte of ["largo", "chorro"]) {
+      await page.click(`label[for=corte-${corte}]`);
+      for (const c of [{ pos_bomba: null, azimut: 0 }, { pos_bomba: [2.7, 2.2, 0.3], azimut: -150, elevacion: -10 }, { pos_bomba: [0.5, 1.2, 0.6], azimut: 70, elevacion: 0 }]) {
+        await page.evaluate((c) => window.visor.aplica(c), c);
+        await page.waitForTimeout(2000);
+        const q = await page.evaluate(() => {
+          const { o, h, h0, h1 } = window.visor.corte, k = window.visor.caja, ray = window.visor.rayo();
+          const ext = [h0, h1].map((s) => Math.hypot(o[0] + s * h[0] - k.cx, o[1] + s * h[1] - k.cy) - k.R);
+          return { ext, rayo: ray.donde === "pared" ? Math.hypot(ray.fin[0] - k.cx, ray.fin[1] - k.cy) - k.R : 0, fuera: window.visor.fueraDelAgua() };
+        });
+        const nombre = `${corte}, bomba ${c.pos_bomba ? c.pos_bomba.slice(0, 2) : "en el tubo"}`;
+        revisa(`corte por la cuerda (${nombre})`, q.ext.every((e) => Math.abs(e) < 1e-9) && Math.abs(q.rayo) < 1e-9, JSON.stringify(q.ext));
+        revisa(`partículas solo en el agua (${nombre})`, q.fuera.n === 0 && q.fuera.total > 200, JSON.stringify(q.fuera));
+      }
+    }
+    revisa("sin errores de consola (redonda)", !errores.length, errores.join(" | "));
+    await ctx.close();
+  }
   console.log(`revisión: ${bien} bien, ${mal} mal`);
   fallas += mal;
 }
@@ -444,7 +546,21 @@ async function revision() {
 // ---------- rótulos ----------
 
 async function rotulos() {
-  const configs = [
+  const redondas = [
+    ["por omisión", {}],
+    ["chorro a 90°", { azimut: 90 }],
+    ["chorro hacia el pozo", { azimut: 180 }],
+    ["chorro inclinado", { azimut: 45, elevacion: -25 }],
+    ["libre junto a la pared", { pos_bomba: [2.7, 2.2, 0.3], azimut: -150, elevacion: -10 }],
+    ["libre del otro lado", { pos_bomba: [0.6, 1.0, 0.6], azimut: 30, elevacion: 0 }],
+    ["bomba baja", { z_bomba: 0.15 }],
+    ["dosis en la boca", { lugar_dosis: "mastil" }],
+    ["dosis libre", { lugar_dosis: [2.4, 0.9, 1.1] }],
+    ["nivel a 70 cm", { nivel: 0.7, z_bomba: 0.35 }],
+    ["boca a un lado", { boca: [2.2, 1.63], pozo: [1.9, 1.63, 0.45], llenado: [1.9, 1.88, 1.1] }],
+    ["diámetro 2.5 m", { diametro: 2.5, boca: [1.25, 1.25], pozo: [0.95, 1.25, 0.45], llenado: [0.95, 1.5, 1.1] }],
+  ].map(([n, c]) => [`redonda, ${n}`, { ...REDONDA, ...c }]);
+  const rectangulares = [
     ["por omisión", {}],
     ["libre al centro", { pos_bomba: [1.7, 1.2, 0.5], azimut: 0, elevacion: -10 }],
     ["libre en la esquina", { pos_bomba: [3.1, 2.2, 0.3], azimut: -135, elevacion: 0 }],
@@ -455,17 +571,15 @@ async function rotulos() {
     ["dosis en la boca", { lugar_dosis: "mastil" }],
     ["dosis libre", { lugar_dosis: [2.5, 0.6, 1.1] }],
     ["nivel a 70 cm", { nivel: 0.7, z_bomba: 0.35 }],
-  ];
+  ].map(([n, c]) => [`rectangular, ${n}`, { ...RECT_DOC, ...c }]);
+  const configs = [...redondas, ...rectangulares];
   let total = 0, revisados = 0;
   for (const w of [400, 760, 1024, 1280, 1600]) {
     const { ctx, page } = await abre({ w, h: 860 });
     for (const corte of ["largo", "chorro"]) {
       await page.click(`label[for=corte-${corte}]`);
       for (const [nombre, cambios] of configs) {
-        await page.evaluate((c) => {
-          const d = { pos_bomba: null, azimut: null, elevacion: null, angulo_tubo: 60, z_bomba: 0.5, lugar_dosis: "llenado", nivel: 1.2 };
-          window.visor.aplica({ ...d, ...c });
-        }, cambios);
+        await page.evaluate((c) => window.visor.aplica(c), cambios);
         await page.waitForTimeout(150);
         const r = await page.evaluate(() => window.visor.choques());
         const malos = [...r.planta.map((x) => `planta: ${x}`), ...r.corte.map((x) => `corte: ${x}`)];
@@ -477,6 +591,7 @@ async function rotulos() {
     await ctx.close();
   }
   console.log(`${revisados} vistas revisadas, ${total} rótulos con choque`);
+  fallas += total;
 }
 
 // ---------- rendimiento ----------
@@ -500,7 +615,8 @@ async function rendimiento() {
           peor = Math.max(peor, t - prev);
           prev = t;
           const a = (t - t0) / 1000;
-          window.visor.cfg.pos_bomba = [1.7 + Math.cos(a) * 0.8, 1.2 + Math.sin(a) * 0.6, 0.5];
+          const k = window.visor.caja;
+          window.visor.cfg.pos_bomba = [k.cx + Math.cos(a) * 0.8, k.cy + Math.sin(a) * 0.6, 0.5];
           window.visor.aplica({});
           if (t - t0 < 3000) requestAnimationFrame(f);
           else ok();

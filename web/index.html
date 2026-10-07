@@ -99,6 +99,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   background: var(--bg);
   color: var(--tinta);
@@ -349,6 +350,7 @@ input[type="range"] { accent-color: var(--acento); height: 40px; margin: 0; curs
   width: 100%;
 }
 .campo select { font-family: var(--f-ui); font-size: 15px; text-overflow: ellipsis; }
+.campo.ancha { grid-column: 1 / -1; }
 .texto { font-size: 13px; color: var(--tinta-2); margin: 0; }
 .supuestos { font-size: 13px; color: var(--tinta-2); padding: 0 12px 12px 30px; margin: 0; display: grid; gap: 4px; }
 details.grupo > summary {
@@ -510,14 +512,14 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
         <div class="hoja-cab">
           <h2 id="t-corte">Corte <small id="t-corte-sub">a lo largo</small></h2>
           <div class="seg" role="radiogroup" aria-label="Plano del corte vertical">
-            <input type="radio" name="corte" id="corte-largo" value="largo" checked><label for="corte-largo">A lo largo</label>
+            <input type="radio" name="corte" id="corte-largo" value="largo" checked><label for="corte-largo" id="l-corte-largo">Cuerda por la bomba</label>
             <input type="radio" name="corte" id="corte-chorro" value="chorro"><label for="corte-chorro">Plano del chorro</label>
           </div>
         </div>
         <div class="lienzo">
           <canvas id="c-corte" role="img" aria-label="Corte vertical de la cisterna con el nivel del agua, las bombas, el mástil y el flujo"></canvas>
         </div>
-        <p class="pie" id="pie-corte">Corte por la bomba de mezcla. Partículas a ±25 cm del corte.</p>
+        <p class="pie" id="pie-corte">Corte por la cuerda que pasa por la bomba de mezcla. Partículas a ±25 cm del corte.</p>
       </section>
 
       <section class="hoja" id="h-grafica" aria-labelledby="t-grafica">
@@ -561,17 +563,17 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
           <input type="range" id="altura" min="8" max="110" step="1" value="50">
         </div>
         <div class="fila">
-          <label for="angulo">Inclinación del mástil</label><output id="o-angulo" for="angulo">60°</output>
-          <input type="range" id="angulo" min="20" max="90" step="1" value="60">
-          <span class="nota">Grados sobre la horizontal. Con la bomba en el mástil también mueve su posición.</span>
+          <label for="angulo">Inclinación del mástil</label><output id="o-angulo" for="angulo">90°</output>
+          <input type="range" id="angulo" min="20" max="90" step="1" value="90">
+          <span class="nota">Grados sobre la horizontal. 90° es el tubo vertical parado en el piso bajo la boca; con otro ángulo cuelga del travesaño y mueve la bomba.</span>
         </div>
         <div class="fila">
-          <label for="azimut">Dirección del chorro en planta</label><output id="o-azimut" for="azimut">33°</output>
-          <input type="range" id="azimut" min="-180" max="180" step="1" value="33">
+          <label for="azimut">Dirección del chorro en planta</label><output id="o-azimut" for="azimut">0°</output>
+          <input type="range" id="azimut" min="-180" max="180" step="1" value="0">
         </div>
         <div class="fila">
-          <label for="elevacion">Inclinación del chorro</label><output id="o-elevacion" for="elevacion">-60°</output>
-          <input type="range" id="elevacion" min="-90" max="90" step="1" value="-60">
+          <label for="elevacion">Inclinación del chorro</label><output id="o-elevacion" for="elevacion">0°</output>
+          <input type="range" id="elevacion" min="-90" max="90" step="1" value="0">
           <span class="nota">Negativo hacia abajo. 0 es horizontal.</span>
         </div>
         <div class="botones">
@@ -657,9 +659,16 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
         <div id="editar-caja" class="cuerpo" style="padding:0" hidden>
           <p class="texto">Arrastra en la planta la boca de la tapa, la bomba de pozo y el flotador.</p>
           <div class="campos">
-            <label class="campo" for="largo">Largo (cm)<input type="number" id="largo" min="100" max="800" step="1" value="340" inputmode="numeric"></label>
-            <label class="campo" for="ancho">Ancho (cm)<input type="number" id="ancho" min="100" max="800" step="1" value="245" inputmode="numeric"></label>
-            <label class="campo" for="ztapa">Travesaño (cm)<input type="number" id="ztapa" min="40" max="300" step="1" value="135" inputmode="numeric"></label>
+            <label class="campo ancha" for="forma">Forma
+              <select id="forma">
+                <option value="redonda" selected>Redonda</option>
+                <option value="rectangular">Rectangular</option>
+              </select>
+            </label>
+            <label class="campo" for="diametro" id="campo-diametro">Diámetro (cm)<input type="number" id="diametro" min="100" max="800" step="1" value="326" inputmode="numeric"></label>
+            <label class="campo" for="largo" id="campo-largo" hidden>Largo (cm)<input type="number" id="largo" min="100" max="800" step="1" value="340" inputmode="numeric"></label>
+            <label class="campo" for="ancho" id="campo-ancho" hidden>Ancho (cm)<input type="number" id="ancho" min="100" max="800" step="1" value="245" inputmode="numeric"></label>
+            <label class="campo" for="ztapa">Tapa (cm)<input type="number" id="ztapa" min="40" max="300" step="1" value="135" inputmode="numeric"></label>
             <label class="campo" for="zrejilla">Rejilla pozo (cm)<input type="number" id="zrejilla" min="5" max="200" step="1" value="45" inputmode="numeric"></label>
           </div>
           <button id="medidas-doc" class="boton chico" type="button">Regresar a las medidas supuestas</button>
@@ -670,7 +679,9 @@ details.grupo[open] > summary { border-bottom: 1px solid var(--linea); }
     <details class="grupo" id="p-supuestos">
       <summary>Supuestos</summary>
       <ul class="supuestos">
-        <li>Planta rectangular de 3.40 x 2.45 m y posiciones de la boca, la bomba de pozo y el flotador: supuestas, cámbialas en Editar.</li>
+        <li>Cisterna redonda, con la boca y el flotador junto a la bomba de pozo: lo dijo Erick. Supuestos que puedes cambiar en Editar: 3.26 m de diámetro (el cilindro de 10 m³ con 1.20 m de agua), la boca al centro, la bomba de pozo a 30 cm de la boca y el lado del flotador.</li>
+        <li>Tubo vertical parado en el piso bajo la boca, bomba amarrada a 50 cm con el cuerpo de pie y el chorro horizontal, sonda ORP a 20 cm mirando de lado: propuesta de Erick. Que el chorro apunte lejos del pozo es supuesto.</li>
+        <li>La bomba y las sondas se dibujan a un lado del tubo (la ORP, del lado contrario al pozo); el motor las pone en su eje, a menos de una celda.</li>
         <li>Boca de 60 x 60 cm, muros de 15 cm, losa de 10 cm y cuerpo de la bomba de pozo de 4": solo para el dibujo.</li>
         <li>Curva de la Mibee lineal entre 800 L/h a 0 m y 0 L/h a 5 m (ficha sin verificar).</li>
         <li>Velocidad del chorro donde pega: chorro redondo libre, u = 6.2 u0 d / x. Es una estimación.</li>

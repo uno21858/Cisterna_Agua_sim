@@ -100,6 +100,7 @@ export function creaMotor(manda, { presupuestoMs = 14, enHiloPrincipal = false }
       tipo: "snap", id, t: sim.t, cFinal: sim.cFinal, encendida: encendida(), apagaEn, vSim, costoPaso,
       nx, ny, nz, dx: sim.dx, dy: sim.dy, dz: sim.dz, volCelda: sim.volCelda,
       L: sim.cfg.largo, W: sim.cfg.ancho, H: sim.cfg.nivel, vmax, vEsc, eventos, set: s,
+      redonda: sim.redonda, agua: sim.agua,
     };
     // En el hilo principal la respuesta llega dentro de manda(): el estado va antes.
     eventos = [];
