@@ -323,7 +323,11 @@ planta y corte, a 1280 y 400 px). Huecos del punto 10 y cómo se resolvieron:
 - **Corte**: dos opciones, "Cuerda por la bomba" (y = bomba, paredes en `cx ± sqrt(R² - (y - cy)²)`) y el plano del
   chorro recortado al círculo (la misma cuerda que `seccionChorro`). Una cuerda que no pasa por el centro corta el
   muro en diagonal: se dibuja con su grueso aparente `sqrt((R + MURO)² - e²) - sqrt(R² - e²)` (e: distancia de la
-  cuerda al centro). La cota de abajo dice `Ø 326` por el centro y `305 de cuerda` fuera de él.
+  cuerda al centro). La cota de abajo dice `Ø 326` por el centro y `305 de cuerda` fuera de él. La vista abarca
+  siempre el diámetro con sus muros, centrada en el eje del cilindro: la escala y el alto del lienzo no cambian al
+  mover la bomba (con la cuerda ajustada a la vista, al arrastrar la bomba el lienzo cambiaba de alto en cada cuadro
+  y la página brincaba), y una cuerda fuera del centro se ve con las paredes más juntas, como un corte de verdad. Al
+  cambiar la escala o el plano las partículas conservan su posición en metros y solo se borran sus estelas.
 - **Cotas de la planta**: el diámetro abajo (líneas de referencia desde las tangentes, fuera del muro) y la distancia
   de la bomba al muro por el radio, en lugar de las distancias a las dos paredes más cercanas. Con la bomba al centro
   la línea va perpendicular al chorro, del lado contrario al pozo y al flotador.

@@ -417,7 +417,9 @@ const tuboVertical = (c = cfgV) => c.angulo_tubo === 90;
 
 // Corte vertical: a lo largo (y = bomba) o por el plano del chorro. En la redonda es la cuerda del
 // círculo por la bomba y el muro cortado en diagonal se ve más grueso (m0, m1); en la rectangular el
-// muro siempre mide MURO.
+// muro siempre mide MURO. [f0, f1] es lo que abarca la vista: en la redonda siempre el diámetro con sus
+// muros, centrado en el eje del cilindro, así que la escala no cambia al mover la bomba (una cuerda fuera
+// del centro muestra las paredes más juntas, como un corte de verdad).
 function planoCorte() {
   const p = geo.pos_bomba, k = caja();
   if (k.redonda) {
@@ -426,9 +428,12 @@ function planoCorte() {
     const ox = o[0] - k.cx, oy = o[1] - k.cy, b = ox * hx + oy * hy;
     const e2 = Math.max(ox * ox + oy * oy - b * b, 0);
     const s = Math.sqrt(Math.max(k.R * k.R - e2, 0)), so = Math.sqrt(Math.max((k.R + MURO) ** 2 - e2, 0));
-    return { o, h: [hx, hy], n: [-hy, hx], h0: -b - s, h1: -b + s, m0: so - s, m1: so - s, e: Math.sqrt(e2) };
+    return {
+      o, h: [hx, hy], n: [-hy, hx], h0: -b - s, h1: -b + s, m0: so - s, m1: so - s, e: Math.sqrt(e2),
+      f0: -b - k.R - MURO, f1: -b + k.R + MURO,
+    };
   }
-  if (est.corte === "largo") return { o: [0, p[1]], h: [1, 0], n: [0, 1], h0: 0, h1: k.L, m0: MURO, m1: MURO };
+  if (est.corte === "largo") return { o: [0, p[1]], h: [1, 0], n: [0, 1], h0: 0, h1: k.L, m0: MURO, m1: MURO, f0: -MURO, f1: k.L + MURO };
   const [hx, hy] = geo.plano_chorro;
   let h0 = -Infinity, h1 = Infinity;
   for (const [p0, d, L] of [[p[0], hx, k.L], [p[1], hy, k.W]]) {
@@ -438,7 +443,7 @@ function planoCorte() {
       h1 = Math.min(h1, Math.max(a, b));
     }
   }
-  return { o: [p[0], p[1]], h: [hx, hy], n: [-hy, hx], h0, h1, m0: MURO, m1: MURO };
+  return { o: [p[0], p[1]], h: [hx, hy], n: [-hy, hx], h0, h1, m0: MURO, m1: MURO, f0: h0 - MURO, f1: h1 + MURO };
 }
 
 function proy(pc, x, y) {
@@ -569,6 +574,7 @@ function creaVista(id, tipo) {
 function dimensiona(v) {
   const w = v.canvas.parentElement.clientWidth;
   if (!w) return;
+  let olvida = false;
   const hMax = Math.max(240, window.innerHeight * (window.innerWidth >= 760 ? 0.62 : 0.75));
   let esc, h;
   if (v.tipo === "planta") {
@@ -590,22 +596,22 @@ function dimensiona(v) {
   } else {
     const pc = planoCorte();
     const clave = [pc.o, pc.h, pc.h0, pc.h1].flat().map((q) => q.toFixed(3)).join();
-    if (clave !== v.clavePlano) v.P = null;
+    if (clave !== v.clavePlano) olvida = true;
     v.clavePlano = clave;
     v.pc = pc;
     const m = { l: 30, r: 52, t: 8, b: 50 };
     const zTop = cfgV.z_tapa + LOSA + 0.30, zBot = -MURO;
-    const ew = pc.h1 - pc.h0 + pc.m0 + pc.m1, eh = zTop - zBot;
+    const ew = pc.f1 - pc.f0, eh = zTop - zBot;
     esc = (w - m.l - m.r) / ew;
     h = m.t + m.b + eh * esc;
     if (h > hMax) {
       esc = (hMax - m.t - m.b) / eh;
       h = hMax;
     }
-    const ox = m.l + (w - m.l - m.r - ew * esc) / 2 + pc.m0 * esc;
-    v.X = (s) => ox + (s - pc.h0) * esc;
+    const ox = m.l + (w - m.l - m.r - ew * esc) / 2;
+    v.X = (s) => ox + (s - pc.f0) * esc;
     v.Y = (z) => m.t + (zTop - z) * esc;
-    v.inv = (px, py) => [pc.h0 + (px - ox) / esc, zTop - (py - m.t) / esc];
+    v.inv = (px, py) => [pc.f0 + (px - ox) / esc, zTop - (py - m.t) / esc];
   }
   h = Math.round(h);
   const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
@@ -624,7 +630,14 @@ function dimensiona(v) {
     v.c32 = new Uint32Array(v.cimg.data.buffer);
     patron = null;
   }
-  if (v.esc !== esc) v.P = null;
+  // Otra escala u otro plano: las posiciones en metros siguen valiendo y solo se borran las estelas, que
+  // están en píxeles (al arrastrar la bomba en la redonda la cuerda cambia en cada cuadro). Si cambia el
+  // número de partículas, se rehacen.
+  if (v.esc !== esc) olvida = true;
+  if (olvida && v.P) {
+    if (v.P.n === cuantasParticulas(v)) v.P.cuenta.fill(0);
+    else v.P = null;
+  }
   v.esc = esc;
   v.sucio = true;
   v.flechas = null;
@@ -1656,8 +1669,10 @@ function pintaFondoCorte(v) {
 // Posiciones en metros (3D) y estela en píxeles CSS. Se rasterizan en un ImageData propio:
 // miles de trazos con stroke() cuestan decenas de ms por cuadro en un canvas sin GPU.
 
+const cuantasParticulas = (v) => Math.round(clamp((v.w * v.h) / (v.tipo === "planta" ? 150 : 170), 250, 1400));
+
 function creaParticulas(v) {
-  const n = Math.round(clamp((v.w * v.h) / (v.tipo === "planta" ? 150 : 170), 250, 1400));
+  const n = cuantasParticulas(v);
   const P = {
     n, x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n),
     edad: new Float32Array(n), vida: new Float32Array(n),
