@@ -108,7 +108,7 @@ export function simula(c) {
   const zFondo = sim.dz / 2;
   const t = [], cov = [], cmin = [], cmax = [];
   let corto = 0, vfSuma = 0, giroSuma = 0, rapSuma = 0, nOn = 0, prox = 0, sale10 = null, sale45 = null;
-  let llave = 0, sobre2 = 0, salePrev = 0, tPrev = 0;
+  let llave = 0, sobre2 = 0, salePrev = 0, tPrev = 0, rej2 = -1, rej11 = -1;
   for (;;) {
     if (sim.t >= prox - 1e-9) {
       const s = sim.stats();
@@ -134,6 +134,10 @@ export function simula(c) {
       }
       salePrev = sim.salida_mg;
       tPrev = sim.t;
+      // último instante con la rejilla arriba de 2 veces y de 1.1 veces la meta
+      const rej = sim.muestrea("c", px, py, pz) / cf;
+      if (rej > 2) rej2 = sim.t;
+      if (rej > 1.1) rej11 = sim.t;
       if (sale10 == null && sim.t >= 600 - 1e-9) sale10 = sim.salida_mg / masa;
       if (sale45 == null && sim.t >= 2700 - 1e-9) sale45 = sim.salida_mg / masa;
       prox += MUESTRA_S;
@@ -159,6 +163,8 @@ export function simula(c) {
     rapidez: nOn ? Math.round((rapSuma / nOn) * 1e4) / 1e4 : null,
     sale10: sale10 == null ? null : r3(sale10),
     sale45: sale45 == null ? null : r3(sale45),
+    rejilla2: r3((rej2 < 0 ? 0 : rej2 + MUESTRA_S) / 60),
+    rejilla11: r3((rej11 < 0 ? 0 : rej11 + MUESTRA_S) / 60),
     llave: sim.q > 0 ? r3(llave) : null,
     sobre2: sim.q > 0 ? r3(sobre2) : null,
     seg: r3((performance.now() - t0r) / 1000),
@@ -304,9 +310,10 @@ function reporte(hechos) {
       });
       L.push(`| ${az} | ${celdas.join(" | ")} |`);
     }
-    L.push("", "Detalle (t95 / ±10 % en min, pico, rapidez máxima en el fondo, giro medio y rapidez media del agua en cm/s):", "",
-      "| caso | t95 | ±10 % | pico | fondo m/s | giro cm/s | rapidez cm/s |", "|---|---|---|---|---|---|---|");
-    const fila = (nombre, r) => L.push(`| ${nombre} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${r.vf_med} | ${cm(r.giro)} | ${cm(r.rapidez)} |`);
+    L.push("", "Detalle (t95 y ±10 % en min; pico en la rejilla; minuto desde el cual la rejilla queda abajo de 2 y de 1.1 veces la meta; rapidez máxima en el fondo; giro medio y rapidez media del agua en cm/s):", "",
+      "| caso | t95 | ±10 % | pico | rejilla < 2 veces | rejilla < 1.1 veces | fondo m/s | giro cm/s | rapidez cm/s |",
+      "|---|---|---|---|---|---|---|---|---|");
+    const fila = (nombre, r) => L.push(`| ${nombre} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${r.rejilla2 ?? ""} | ${r.rejilla11 ?? ""} | ${r.vf_med} | ${cm(r.giro)} | ${cm(r.rapidez)} |`);
     const props = tamiz(hechos, llenado).sort((a, b) => costo(a) - costo(b));
     for (const r of props.slice(0, 4)) fila(`propuesta az ${r.az} el ${r.el}`, r);
     const b = menosPico(hechos, llenado);
@@ -357,7 +364,7 @@ function reporte(hechos) {
       for (const [n, r] of dos) {
         const q = r.consumo ? [`${(100 * r.sale10).toFixed(1)} %`, `${(100 * r.sale45).toFixed(1)} %`, r.llave?.toFixed(2) ?? "", r.sobre2?.toFixed(1) ?? ""]
           : ["-", "-", "-", "-"];
-        L.push(`| ${n} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${q.join(" | ")} |`);
+        L.push(`| ${n} | ${fmt(r.t95)} | ${r.consumo ? "-" : fmt(r.t10)} | ${r.corto.toFixed(2)} | ${q.join(" | ")} |`);
       }
     }
     const con = todos.filter((r) => r.llenado === llenado && r.consumo && nominal(r));
