@@ -46,6 +46,7 @@ def _args():
     p.add_argument("--pos-bomba", type=float, nargs=3, metavar=("X", "Y", "Z"), help="bomba fuera del mástil (m)")
     p.add_argument("--azimut", type=float, default=d.azimut, help="dirección del chorro en planta, grados desde +x hacia +y")
     p.add_argument("--elevacion", type=float, default=d.elevacion, help="grados sobre la horizontal (negativo = hacia abajo)")
+    p.add_argument("--chorro-tubo", action="store_true", help="chorro a lo largo del tubo (diseño del doc con --angulo 60)")
     p.add_argument("--dosis", choices=LUGARES_DOSIS, default=d.lugar_dosis)
     p.add_argument("--dosis-ml", type=float, default=d.dosis_ml, help="mL de Cloralex")
     p.add_argument("--precalentar", type=float, default=d.precalentar_s, help="s de bomba andando antes de la dosis")
@@ -58,7 +59,7 @@ def _args():
     return a, Config(minutos=a.minutos, bomba_min=a.bomba_min, dx=a.dx, forma=a.forma, diametro=a.diametro,
                      largo=a.largo, ancho=a.ancho, nivel=a.nivel, q_max_lh=a.caudal_lh, h_max_m=a.hmax, salida_mm=a.salida_mm,
                      boquilla_mm=a.boquilla_mm, angulo_tubo=a.angulo,
-                     pos_bomba=tuple(a.pos_bomba) if a.pos_bomba else None, azimut=a.azimut, elevacion=a.elevacion, lugar_dosis=a.dosis, dosis_ml=a.dosis_ml, precalentar_s=a.precalentar,
+                     pos_bomba=tuple(a.pos_bomba) if a.pos_bomba else None, azimut=None if a.chorro_tubo else a.azimut, elevacion=None if a.chorro_tubo else a.elevacion, lugar_dosis=a.dosis, dosis_ml=a.dosis_ml, precalentar_s=a.precalentar,
                      c_nu=a.c_nu)
 
 

@@ -1,37 +1,38 @@
-# Simulación de mezcla: cisterna de 10,000 L con la mini bomba Mibee
+# Simulación de mezcla: cisterna redonda de 10,000 L con la mini bomba Mibee
 
-Simula cómo mueve el agua la mini bomba de mezcla (Mibee brushless de 12 V, 800 L/h y 5 m según la ficha, salida radial de 8 mm) dentro de la cisterna de 10 m³, y cuánto tarda en repartir una dosis de Cloralex. Sale del documento de proyecto *Cloración automática de la cisterna* (fase 1, prueba 9c).
+Simula cómo mueve el agua la mini bomba de mezcla (Mibee brushless de 12 V, 800 L/h y 5 m según la ficha, salida radial de 8 mm) dentro de la cisterna redonda de 10 m³, y cuánto tarda en repartir una dosis de Cloralex. Sale del documento de proyecto *Cloración automática de la cisterna* (fase 1, prueba 9c).
 
-Tres piezas que comparten la misma física:
+Tres piezas que comparten la misma física (cisterna redonda o rectangular):
 
 | Pieza | Para qué | Dónde corre |
 |---|---|---|
 | **Visor en vivo** (`web/`) | Ver el flujo en planta y corte, mover la bomba y el chorro, echar cloro | Tu navegador (artifact de claude.ai, o local) |
 | **Simulador Python** (`cisterna_sim/`, `simular.py`) | Corridas completas con gráficas, GIF y CSV; fuente de verdad de la física | CPU con numpy o GPU con CuPy |
-| **Barrido** (`web/sweep.mjs`) | Cientos de casos para decidir dónde y con qué ángulo va la bomba | Node |
+| **Barridos** (`web/propuesta.mjs`, `web/sweep.mjs`) | Cientos de casos para decidir dónde y con qué ángulo va la bomba | Node |
 
 ## Lo que salió
 
-**Dónde y cómo poner la bomba** (detalle y tablas en [`docs/colocacion.md`](docs/colocacion.md)):
+**La propuesta de tubo vertical en la cisterna redonda** (detalle y tablas en [`docs/propuesta.md`](docs/propuesta.md), 105 simulaciones):
 
-1. Chorro **horizontal o un poco hacia arriba**, nunca hacia el fondo. El diseño del documento (60° hacia abajo) tarda 66 ± 5 min y barre el piso; el mismo lugar con el chorro a +15° baja a 30 min.
-2. A **50 cm** del fondo, apuntado **a lo largo** de la cisterna, con el eje del chorro a 0.75 m o más de la rejilla de la bomba de pozo.
-3. Mejor aún a ~1 m de la boca, del lado por donde entra el cloro: **13.8 ± 0.1 min**.
-4. La bomba va **acostada** para que su salida de 8 mm quede horizontal, sin codos G1/2 después de la salida (frenan el chorro).
+1. Tubo vertical parado en el piso bajo la boca; la Mibee amarrada a **50 cm** con el cuerpo vertical y la toma arriba, así su salida de 8 mm queda horizontal sin codos.
+2. **Chorro horizontal (o hasta 15° arriba), apuntado al lado contrario del flotador**, en la línea flotador → tubo. Así también se aleja de la bomba de pozo. t95 de **14.3 a 14.7 min**, firme con la malla y la puntería ±5°.
+3. Nunca hacia el fondo: el diseño del documento (mástil a 60°, chorro -60°) tarda 23 a 29 min y barre el piso 4 a 7 veces más rápido.
+4. El cloro, por el flotador (boca B), y **sin que nadie use agua los primeros 10 min**: el flotador queda junto a la succión de la casa. Si la casa jala agua al echarlo, solo se va ~3 % del cloro, pero a la llave le llega un golpe de hasta 14 a 16 veces la meta durante ~2 min.
+5. Un chorro tangencial junto a la pared sí hace girar todo el volumen, pero no mezcla mejor (16 a 18 min) y pide la bomba lejos de la boca.
 
-El chorro horizontal le ganó al de -60° en las cinco geometrías que se probaron; los minutos exactos dependen de la cisterna real.
+Supuestos de ese estudio: diámetro de 3.26 m, boca al centro, bomba de pozo a 30 cm de la boca y flotador a 25 cm del pozo. Con tus medidas reales se revisa en el visor o relanzando el barrido (es reanudable). El estudio anterior con planta rectangular está en [`docs/colocacion.md`](docs/colocacion.md).
 
 **La bomba** (`python formula.py`): con la salida de fábrica de 8 mm y los 800 L/h de la ficha, la fórmula da 25 min a tanque lleno. Una reducción a 6-7 mm casi no cambia nada y una manguera más ancha empeora (16 mm: 50 min). Lo que más importa es el caudal real: medirlo llenando una cubeta y meterlo con `--caudal-lh`.
 
 ## Visor en vivo
 
-Publicado como artifact: https://claude.ai/artifact/JhRSrqH8qXQSp3DYJqTi9H (privado hasta que lo compartas). La simulación corre en tu dispositivo, en un Web Worker, a ~30 veces el tiempo real con celdas de 10 cm.
+Publicado como artifact: https://claude.ai/artifact/JhRSrqH8qXQSp3DYJqTi9H (privado hasta que lo compartas). La simulación corre en tu dispositivo, en un Web Worker, con celdas de 10 cm. Abre con tu cisterna redonda y el tubo vertical; "Editar la cisterna" cambia forma, diámetro y posiciones, y "Chorro recomendado" aplica la regla del flotador.
 
 Local:
 
 ```bash
 npx http-server web -p 8080 -c-1     # y abre http://localhost:8080/dev.html
-node --test web/test/                # 30 pruebas del motor, incluida la paridad con Python
+node --test web/test/                # 51 pruebas del motor, incluida la paridad con Python
 ```
 
 ## Simulador Python
@@ -39,14 +40,16 @@ node --test web/test/                # 30 pruebas del motor, incluida la paridad
 ```bash
 pip install -r requirements.txt
 
-python simular.py --f32                                   # diseño del doc, dosis por el llenado, bomba 45 min
-python simular.py --f32 --pos-bomba 0.65 1.835 0.5 --azimut 348.4 --elevacion 0   # la colocación recomendada
+python simular.py --f32                                   # tu propuesta: redonda, tubo vertical, chorro contrario al flotador
+python simular.py --f32 --angulo 60 --chorro-tubo         # el diseño del documento, para comparar
 python simular.py --dosis mastil --precalentar 600 --bomba-min 60                 # protocolo de la prueba 9c
+python simular.py --diametro 2.9 --nivel 1.5              # con tus medidas
+python simular.py --forma rectangular --largo 3.40 --ancho 2.45                   # planta rectangular
 python formula.py --caudal-lh 550                         # con el caudal que midas
-python -m pytest                                          # 25 pruebas
+python -m pytest                                          # 92 pruebas
 ```
 
-Salidas en `resultados/` (o `--salida`): `mezcla.png` (lo que verían las tiras de la prueba 9c), `flujo.png` (corte y planta del flujo promedio), `cloro.gif`, `serie.csv`, `resumen.json`. Corridas de referencia en [`ejemplos/`](ejemplos/).
+Salidas en `resultados/` (o `--salida`): `mezcla.png` (lo que verían las tiras de la prueba 9c), `flujo.png` (corte y planta del flujo promedio), `cloro.gif`, `serie.csv`, `resumen.json`. Corridas de referencia en [`ejemplos/`](ejemplos/): tu propuesta contra el diseño del documento, en la cisterna redonda.
 
 ### En GPU (server con las 3060)
 
@@ -79,6 +82,8 @@ La boquilla no cabe en una celda de 10 cm, así que el chorro entra como una fue
 
 **Punto de operación.** La ficha (800 L/h a 0 m) se mide descargando libre por la salida de fábrica, así que con esa salida la bomba da su caudal máximo. Una reducción más chica agrega K·(u_b² − u_s²)/2g contra la curva lineal entre 800 L/h a 0 m y 0 L/h a 5 m.
 
+**Cisterna redonda**: la misma malla sobre la caja que contiene al cilindro, con una máscara de agua por columna; las caras fuera del agua quedan cerradas, la pared escalonada no desliza y la presión se resuelve con gradiente conjugado usando la DCT de la caja como precondicionador (3 a 4 iteraciones por paso con arranque en caliente). Python y JS dan lo mismo a 1e-15 también en la redonda.
+
 **Consumo de la casa** (solo en el motor JS y el visor): sumidero en la rejilla de la bomba de pozo y fuente con chorro en el llenado, con balance de masa del cloro.
 
 ### Por qué C = 0.02
@@ -96,13 +101,13 @@ Fórmula: 44 min. Con 0.02 la simulación coincide y la diferencia entre mallas 
 
 ## Supuestos
 
-Del documento: ~10 m³, nivel lleno 1.20 m, bomba a 50 cm del fondo en un mástil diagonal, sonda ORP a 20 cm, rejilla de la bomba de pozo a ~45 cm, Cloralex ~50 mg/mL.
+Del documento: ~10 m³, nivel lleno 1.20 m, rejilla de la bomba de pozo a ~45 cm, sonda ORP a 20 cm, Cloralex ~50 mg/mL. De Erick: cisterna redonda, flotador y boca B junto a la bomba de pozo, tubo vertical con la bomba a 50 cm y chorro horizontal.
 
-Supuestos (cámbialos en `cisterna_sim/config.py` o en el modo "editar cisterna" del visor cuando tengas las medidas):
+Supuestos (cámbialos en `cisterna_sim/config.py`, por CLI o en "Editar la cisterna" del visor cuando tengas las medidas):
 
-- Planta rectangular de 3.40 × 2.45 m.
-- Boca de la tapa en (1.20, 1.00), bomba de pozo en (0.90, 1.00) y llenado en (0.25, 1.20) m.
-- Mástil a 60° sobre la horizontal: el dibujo del doc no tiene lo horizontal a escala.
+- Diámetro de 3.26 m: el cilindro que da 10 m³ a 1.20 m.
+- Boca de la tapa al centro; bomba de pozo a 30 cm de la boca; flotador a 25 cm del pozo, de un lado.
+- Chorro a -40° en planta: el contrario del flotador con esas posiciones.
 - Curva de la bomba lineal; 800 L/h de la ficha sin verificar.
 
 ## Qué no modela
@@ -127,10 +132,13 @@ web/
   solver.js        port del solver a JS, validado contra Python (error < 1e-15)
   worker.js        motor del visor en un Web Worker
   index.html, app.js   visor en vivo
-  sweep.mjs        barrido de colocación
+  propuesta.mjs    barrido de la propuesta en la cisterna redonda
+  resultados_propuesta/ 105 casos crudos
+  sweep.mjs        barrido anterior (planta rectangular)
   resultados_barrido/  166 casos crudos
   test/            pruebas del motor y referencia de Python
-docs/colocacion.md dónde y cómo poner la bomba
+docs/propuesta.md  dónde y cómo poner la bomba en la cisterna redonda (vigente)
+docs/colocacion.md el estudio anterior con planta rectangular
 tests/             pruebas del simulador Python
-ejemplos/          corridas de referencia: diseño del doc contra colocación recomendada
+ejemplos/          corridas de referencia: tu propuesta contra el diseño del doc
 ```

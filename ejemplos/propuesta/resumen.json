@@ -21,33 +21,33 @@
     "llave de la casa (pozo)",
     "sonda ORP"
   ],
-  "t_cov_5pct_min": 22.833333333333332,
-  "t_todo_10pct_min": 23.333333333333332,
-  "t_todo_5pct_min": 30.666666666666668,
-  "t_arriba_abajo_10pct_min": 11.5,
+  "t_cov_5pct_min": 14.666666666666666,
+  "t_todo_10pct_min": 16.5,
+  "t_todo_5pct_min": 21.833333333333332,
+  "t_arriba_abajo_10pct_min": 11.666666666666666,
   "tiras_9c_mg_l": {
     "15": {
-      "superficie (tapa)": 0.747,
-      "llave de la casa (pozo)": 0.767,
-      "sonda ORP": 0.747
+      "superficie (tapa)": 0.775,
+      "llave de la casa (pozo)": 0.733,
+      "sonda ORP": 0.726
     },
     "30": {
-      "superficie (tapa)": 0.743,
-      "llave de la casa (pozo)": 0.746,
-      "sonda ORP": 0.742
-    },
-    "45": {
-      "superficie (tapa)": 0.743,
-      "llave de la casa (pozo)": 0.744,
-      "sonda ORP": 0.743
-    },
-    "60": {
-      "superficie (tapa)": 0.743,
+      "superficie (tapa)": 0.745,
       "llave de la casa (pozo)": 0.743,
       "sonda ORP": 0.743
+    },
+    "45": {
+      "superficie (tapa)": 0.744,
+      "llave de la casa (pozo)": 0.744,
+      "sonda ORP": 0.744
+    },
+    "60": {
+      "superficie (tapa)": 0.744,
+      "llave de la casa (pozo)": 0.744,
+      "sonda ORP": 0.744
     }
   },
-  "pasos": 9358,
+  "pasos": 8279,
   "forma": "redonda",
   "diametro_m": 3.26,
   "volumen_geometrico_m3": 10.016277025587264
