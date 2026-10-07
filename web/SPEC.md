@@ -191,20 +191,23 @@ vengan), centro `(D/2, D/2)`, radio `R = D/2`.
 
 ### Decisiones de la implementación (huecos de la lista de arriba)
 
-Resueltas en `web/solver.js` (commit "Motor JS: cisterna redonda ..."); Python debe seguirlas para la paridad.
+Resueltas en `web/solver.js` y seguidas en `cisterna_sim/` (commits "Redonda: el cloro se interpola ..." y
+"Redonda: viscosidad solo en el agua ..."). Comprobación rápida, que no sustituye la prueba de paridad: dos casos
+redondos a dx 0.2 (por defecto y con chorro propio), 60 pasos de 0.5 s con la bomba apagada a los 45 y
+tolerancia 1e-13, dan u, v, w, c, dtFlujo y sondas iguales a Python con error relativo <= 2e-15.
 
 - **Consumo en la redonda**: `b = (div(u*) - s)/dt` (el punto 4 omite s). Sumidero, fuente y chorro del llenado
   van con pesos solo en celdas de agua / caras w abiertas (punto 6), así que `s` sigue sumando 0 en el agua.
 - **Viscosidad**: Smagorinsky solo en celdas de agua (las derivadas centradas ven velocidad 0 en las secas, como
   `np.gradient` en la caja); fuera del agua `nu = NU_AGUA` y no entra en `nuMax` (`dtFlujo`, `dtCloro`), porque
-  ninguna cara abierta la usa. Si Python toma `nu_c.max()` en toda la caja, en la práctica da el mismo paso: en 6
-  corridas de 5 min (chorro por defecto, al muro y rozando la pared; dx 0.2 y 0.1) el máximo siempre cayó en el
-  agua. Aun así la regla es "solo agua".
+  ninguna cara abierta la usa. Tomar el máximo en toda la caja casi nunca cambia el paso (en 6 corridas de 5 min,
+  con el chorro por defecto, al muro y rozando la pared, a dx 0.2 y 0.1, el máximo siempre cayó en el agua), pero
+  la regla es "solo agua".
 - **Muestreo del cloro** (`muestrea("c")`, sondas, `corte`, `seccionChorro`): trilineal solo con las columnas de
   agua del estencil 2x2 en planta, pesos renormalizados; si las 4 son agua es la trilineal de siempre. Sin esto,
   una sonda válida a `R - 0.5·dx` lee hasta la mitad de lo real por los ceros del muro. Las velocidades usan la
-  trilineal simple (valen 0 en la pared, que es lo físico). Python debe hacer lo mismo en `muestrea` de campos de
-  centros para que las sondas, muestras y la sección den paridad.
+  trilineal simple (valen 0 en la pared, que es lo físico). Python hace lo mismo en `muestrea` de campos de
+  centros.
 - **Sección del chorro**: en la redonda es la cuerda del círculo por la bomba (igual que Python).
 - **Difusión (punto 3)**: el vecino tangencial cerrado se escribe como fantasma `-u` (mismo número que "vale 0 y
   se suma -u/h²"), con banderas por columna; las caras de la caja son el mismo caso.
@@ -213,7 +216,8 @@ Resueltas en `web/solver.js` (commit "Motor JS: cisterna redonda ..."); Python d
 - **copiaEstado**: solo entre cisternas de la misma forma y malla; copia también `p`.
 - **Advección**: el punto de salida semi-lagrangiano se interpola en la caja completa (las caras cerradas valen 0),
   igual que en Python.
-- **Tolerancia estricta** para la paridad: `sim.tolPresion = 1e-12` en JS (en Python, `TOL_CG`).
+- **Tolerancia estricta** para la paridad: atributo de la instancia, `sim.tolPresion` en JS y `sim.tol_cg` en
+  Python (no es parámetro de la config).
 
 Rendimiento medido en Node 22 (un hilo, 30 s de bomba antes de medir, luego dosis y 150 pasos completos):
 
