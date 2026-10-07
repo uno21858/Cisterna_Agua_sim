@@ -34,7 +34,7 @@ export const DEFAULTS = Object.freeze({
   largo: 3.40, ancho: 2.45, nivel: 1.20, z_tapa: 1.35, dx: 0.10,
   q_max_lh: 800, h_max_m: 5, salida_mm: 8, boquilla_mm: 8, k_salida: 1.0,
   boca: Object.freeze([1.63, 1.63]), angulo_tubo: 90, z_bomba: 0.50, z_orp: 0.20,
-  pos_bomba: null, azimut: 0, elevacion: 0,
+  pos_bomba: null, azimut: -40, elevacion: 0,
   pozo: Object.freeze([1.33, 1.63, 0.45]), llenado: Object.freeze([1.33, 1.88, 1.10]),
   dosis_ml: 150, cloralex_mg_ml: 50, lugar_dosis: "llenado",
   cfl: 0.4, cs: 0.17, c_nu: 0.02, sc_t: 0.7,

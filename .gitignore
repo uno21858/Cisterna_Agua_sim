@@ -5,3 +5,4 @@ __pycache__/
 resultados*/
 web/test/capturas/
 !web/resultados_barrido/
+!web/resultados_propuesta/

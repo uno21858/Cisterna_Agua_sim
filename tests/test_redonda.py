@@ -40,9 +40,12 @@ def test_defaults_son_la_cisterna_de_erick():
     bx, by = cfg.boca
     assert np.allclose(cfg.pos_bomba_xyz(), (bx, by, 0.50), atol=1e-12)
     assert np.allclose(cfg.sondas()["sonda ORP"], (bx, by, 0.20), atol=1e-12)
-    # chorro horizontal, lejos del pozo; pozo a 30 cm de la boca y el llenado junto al pozo
+    # chorro horizontal en la línea llenado -> tubo (regla de docs/propuesta.md), que también lo
+    # aleja del pozo; pozo a 30 cm de la boca y el llenado junto al pozo
     d = np.array(cfg.dir_chorro())
-    assert np.allclose(d, (1.0, 0.0, 0.0), atol=1e-15)
+    assert d[2] == 0
+    linea = np.array(cfg.pos_bomba_xyz()[:2]) - np.array(cfg.llenado[:2])
+    assert d[:2] @ linea / np.linalg.norm(linea) > math.cos(math.radians(2))
     pozo = np.array(cfg.pozo)
     assert d @ (pozo - np.array(cfg.pos_bomba_xyz())) < 0
     assert math.hypot(pozo[0] - bx, pozo[1] - by) == pytest.approx(0.30)

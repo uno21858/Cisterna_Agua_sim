@@ -183,7 +183,8 @@ async function controles(caso) {
   await page.click("#montar");
   await page.click("#seguir");
   a = await st();
-  revisa("montar en el mástil y chorro a lo largo del mástil", a.cfg.pos_bomba === null && a.cfg.azimut == null && a.cfg.elevacion == null);
+  revisa("montar en el tubo y chorro recomendado (horizontal, contrario al flotador)",
+    a.cfg.pos_bomba === null && Number.isFinite(a.cfg.azimut) && a.cfg.elevacion === 0);
 
   // Consumo de la casa: cambia sin reiniciar
   await espera(1500);

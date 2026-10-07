@@ -265,9 +265,12 @@ cisterna_sim/config.py" compara los valores por defecto de los campos de la data
 - La boquilla queda a 30 cm de la rejilla del pozo (0.50 contra 0.45 de altura): la advertencia del visor de
   "< 0.5 m de la rejilla" sale con los defaults. Es la geometría supuesta, no un error.
 - Los casos de `web/test/gen_ref.py`, las pruebas rectangulares (`tests/test_solver.py`,
-  `web/test/solver.test.js`), `web/sweep.mjs` y `web/propuesta.mjs` fijan su forma y geometría, así que dan lo
-  mismo que antes del cambio: los campos de referencia rectangulares salieron idénticos bit a bit, y las 12000
-  configuraciones del barrido y las 324 de la propuesta salen iguales (`configura`) con el solver viejo y el nuevo.
+  `web/test/solver.test.js`) y `web/sweep.mjs` fijan su forma y geometría, así que dan lo mismo que antes del
+  cambio: los campos de referencia rectangulares salieron idénticos bit a bit y las 12000 configuraciones del
+  barrido salen iguales con el solver viejo y el nuevo. `web/propuesta.mjs` ya corre la cisterna redonda
+  (docs/propuesta.md).
+- El azimut por defecto es -40: el contrario del llenado supuesto, regla de docs/propuesta.md. El botón
+  "Chorro recomendado" del visor aplica esa regla con las posiciones que tenga la cisterna editada.
 
 ### Paridad Python contra JS de la redonda (prueba formal)
 

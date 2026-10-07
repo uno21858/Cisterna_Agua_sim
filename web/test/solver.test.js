@@ -215,7 +215,7 @@ test("DEFAULTS congelado y configura copia los arreglos", () => {
   assert.equal(doc.elevacion, null);
 });
 
-test("defaults: la cisterna de Erick (redonda, tubo vertical, chorro horizontal lejos del pozo)", () => {
+test("defaults: la cisterna de Erick (redonda, tubo vertical, chorro horizontal contrario al llenado)", () => {
   validar({});
   const cfg = configura();
   const g = geometria(cfg);
@@ -225,7 +225,11 @@ test("defaults: la cisterna de Erick (redonda, tubo vertical, chorro horizontal 
   const [bx, by] = cfg.boca;
   [bx, by, 0.5].forEach((q, i) => assert.ok(Math.abs(g.pos_bomba[i] - q) < 1e-12, "bomba sobre el tubo a 50 cm"));
   [bx, by, 0.2].forEach((q, i) => assert.ok(Math.abs(g.sondas["sonda ORP"][i] - q) < 1e-12, "sonda ORP a 20 cm"));
-  assert.deepEqual(g.dir_chorro, [1, 0, 0]);
+  // horizontal y en la línea llenado -> tubo (regla de docs/propuesta.md), con menos de 2 grados de error
+  assert.equal(g.dir_chorro[2], 0);
+  const lx = g.pos_bomba[0] - cfg.llenado[0], ly = g.pos_bomba[1] - cfg.llenado[1];
+  const cosAng = (g.dir_chorro[0] * lx + g.dir_chorro[1] * ly) / Math.hypot(lx, ly);
+  assert.ok(cosAng > Math.cos((2 * Math.PI) / 180), "contrario al llenado");
   const hacia = cfg.pozo.map((q, i) => q - g.pos_bomba[i]);
   assert.ok(g.dir_chorro[0] * hacia[0] + g.dir_chorro[1] * hacia[1] + g.dir_chorro[2] * hacia[2] < 0, "lejos del pozo");
   assert.ok(Math.abs(Math.hypot(cfg.pozo[0] - bx, cfg.pozo[1] - by) - 0.30) < 1e-12);

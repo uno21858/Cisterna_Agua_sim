@@ -2283,7 +2283,6 @@ function syncControles() {
   $("altura").max = Math.max(20, cm(cfg.nivel) - 10);
   $("estado-montaje").textContent = cfg.pos_bomba ? "libre" : "en el mástil";
   $("montar").disabled = !cfg.pos_bomba;
-  $("seguir").disabled = cfg.azimut == null && cfg.elevacion == null;
   const redonda = cfg.forma === "redonda";
   $("forma").value = cfg.forma;
   $("diametro").value = cm(cfg.diametro);
@@ -2402,9 +2401,12 @@ $("montar").addEventListener("click", () => {
   cfg.pos_bomba = null;
   cambioCfg();
 });
+// Regla de docs/propuesta.md: chorro horizontal en la línea flotador -> bomba (contrario al
+// flotador, y así también lejos del pozo).
 $("seguir").addEventListener("click", () => {
-  cfg.azimut = null;
-  cfg.elevacion = null;
+  const p = geometria(copia(cfg)).pos_bomba;
+  cfg.azimut = Math.round((Math.atan2(p[1] - cfg.llenado[1], p[0] - cfg.llenado[0]) * 180) / Math.PI);
+  cfg.elevacion = 0;
   cambioCfg();
 });
 

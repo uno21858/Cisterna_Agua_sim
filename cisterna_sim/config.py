@@ -25,7 +25,8 @@ Supuestos (nadie los ha medido; cámbialos aquí o por CLI):
   - boca de la tapa al centro de la cisterna (1.63, 1.63)
   - bomba de pozo a 30 cm de la boca, del lado -x: rejilla en (1.33, 1.63, 0.45)
   - llenado junto al pozo, del lado +y (Erick no dijo de qué lado): (1.33, 1.88, 1.10)
-  - chorro hacia +x (azimut=0), lejos del pozo
+  - chorro horizontal al lado contrario del llenado (azimut=-40, línea llenado -> tubo);
+    es la regla de docs/propuesta.md, que también lo aleja del pozo
   - con forma="rectangular", planta de 3.40 x 2.45 m (3.40 x 2.45 x 1.20 = 10.0 m3)
   - curva de la bomba lineal entre (0, Hmax) y (Qmax, 0), medida con su
     propia salida de 8 mm (los 800 L/h de la ficha están sin verificar)
@@ -71,7 +72,7 @@ class Config:
     # arriba. None = a lo largo del tubo (el diseño del doc; con el tubo vertical el
     # chorro apuntaría al fondo).
     pos_bomba: Optional[tuple[float, float, float]] = None
-    azimut: Optional[float] = 0.0  # hacia +x, lejos del pozo (supuesto)
+    azimut: Optional[float] = -40.0  # contrario al llenado (docs/propuesta.md); depende del lado supuesto
     elevacion: Optional[float] = 0.0  # chorro horizontal
     pozo: tuple[float, float, float] = (1.33, 1.63, 0.45)  # rejilla de la bomba de pozo; supuesto: 30 cm de la boca
     llenado: tuple[float, float, float] = (1.33, 1.88, 1.10)  # flotador (boca B), junto al pozo; lado supuesto
