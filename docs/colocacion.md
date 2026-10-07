@@ -1,5 +1,7 @@
 # Dónde y cómo poner la mini bomba
 
+> **Nota (7 oct):** este estudio se hizo con planta rectangular (3.40 × 2.45 m, supuesta) y el mástil diagonal del documento. Erick confirmó que su cisterna es redonda y propuso un tubo vertical bajo la boca: el estudio vigente es [`propuesta.md`](propuesta.md). Lo de aquí sigue valiendo como comparación (chorro horizontal contra chorro al fondo, montaje de la Mibee, salida sin codos).
+
 Resultado de 166 simulaciones con el motor JS (`web/sweep.mjs`, datos crudos en `web/resultados_barrido/`): Mibee de 12 V a 800 L/h por su salida de 8 mm, cisterna de 10 m³ a 1.20 m, dosis de 150 mL de Cloralex por el llenado, bomba arrancando con la dosis y apagada a los 45 min como el firmware, 90 min simulados. **t95** es el minuto desde el cual el coeficiente de variación de toda la cisterna queda abajo de 5 %.
 
 ## Recomendación
