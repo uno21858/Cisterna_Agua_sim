@@ -1,8 +1,9 @@
-// Barrido de la propuesta de Erick (7 oct): tubo vertical parado en el piso bajo la boca, bomba con
-// el cuerpo vertical (toma arriba) a ~50 cm y el chorro horizontal; sonda ORP a 20 cm de lado. El
-// flotador y la boca B quedan junto a la bomba de pozo, así que el cloro cae casi en su succión.
+// Barrido de la propuesta de Erick (7 oct) en su cisterna redonda: tubo vertical parado en el piso
+// bajo la boca, bomba con el cuerpo vertical (toma arriba) a ~50 cm y el chorro horizontal; sonda ORP
+// a 20 cm de lado. El flotador y la boca B quedan junto a la bomba de pozo, así que el cloro cae casi
+// en su succión.
 //
-//   node web/propuesta.mjs              corre lo que falte (4 hilos) y escribe el reporte
+//   node web/propuesta.mjs              corre lo que falte (3 hilos) y escribe el reporte
 //   node web/propuesta.mjs --reporte    solo el reporte
 //
 // Resultados en web/resultados_propuesta/casos.jsonl; al relanzar se salta lo ya hecho.
@@ -17,38 +18,43 @@ const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const DIR = path.join(AQUI, "resultados_propuesta");
 const JSONL = path.join(DIR, "casos.jsonl");
 const REPORTE = path.join(DIR, "reporte.md");
-const HILOS = 4;
+const HILOS = 3;
 const MUESTRA_S = 10;
 const CORTO_S = 600;
 
-// Planta, boca y pozo son los mismos supuestos de siempre. Lo nuevo (dicho por Erick): el llenado
-// queda junto a la bomba de pozo; no sabemos de qué lado, así que se prueban dos.
-// Planta rectangular y mástil del doc fijos (los defaults ya son la cisterna redonda).
-const BASE = { forma: "rectangular", largo: 3.40, ancho: 2.45, nivel: 1.20, boca: [1.20, 1.00], pozo: [0.90, 1.00, 0.45],
-  dx: 0.10, angulo_tubo: 60, azimut: null, elevacion: null };
-const LLENADOS = { lado: [0.90, 1.25, 1.10], pared: [0.65, 1.00, 1.10] };
-const MASTIL = [1.20, 1.00]; // tubo vertical bajo la boca, a 30 cm de la bomba de pozo
-const AZIMUTS = [0, 30, -30, 60, -60, 90, -90, 180]; // grados en planta desde +x (0 = a lo largo, lejos del pozo)
+// Los DEFAULTS de solver.js del 7 oct, fijos aquí para que el barrido no cambie si cambian los
+// defaults. Supuestos: diámetro (10 m3 a 1.20 m), boca al centro, pozo a 30 cm de la boca.
+const BASE = { forma: "redonda", diametro: 3.26, nivel: 1.20, boca: [1.63, 1.63], pozo: [1.33, 1.63, 0.45], dx: 0.10,
+  angulo_tubo: 90, z_bomba: 0.50, z_orp: 0.20, azimut: 0, elevacion: 0 };
+// Erick dijo que el llenado queda junto a la bomba de pozo, no de qué lado: a un lado (+y, el default)
+// o entre el pozo y la pared. Con este último todo es simétrico respecto a y = 1.63.
+const LLENADOS = { lado: [1.33, 1.88, 1.10], pared: [1.08, 1.63, 1.10] };
+const MASTIL = [1.63, 1.63]; // tubo vertical bajo la boca
+// Grados en planta desde +x: 0 = hacia fuera lejos del pozo, ±90 = de lado (perpendicular a la línea
+// boca-pozo), 180 = hacia el pozo. Desde el centro todo chorro es radial respecto a la pared.
+const AZIMUTS = [0, 45, -45, 90, -90, 135, -135, 180];
 const ELEVACIONES = [-15, 0, 15];
+// Referencia tangencial: bomba a 30 cm de la pared del lado opuesto al pozo, chorro horizontal
+// tangente (giro antihorario visto desde arriba). La distancia a la pared es supuesta.
+const TANGENCIAL = { pos: [2.96, 1.63], az: 90 };
 
 const rad = (g) => (g * Math.PI) / 180;
 const r3 = (x) => (x == null || !Number.isFinite(x) ? x : Math.round(x * 1000) / 1000);
 
-function caso(p) {
+export function caso(p) {
   const c = { z: 0.5, el: 0, consumo: 0, bomba_min: 45, minutos: 90, ...p };
   const cfg = { ...BASE, llenado: LLENADOS[c.llenado], lugar_dosis: "llenado", consumo_lpm: c.consumo };
   if (c.tipo === "propuesta") {
     // la bomba va pegada al tubo, ~6 cm del eje, del lado hacia donde escupe
-    cfg.angulo_tubo = 90;
     cfg.pos_bomba = [MASTIL[0] + 0.06 * Math.cos(rad(c.az)), MASTIL[1] + 0.06 * Math.sin(rad(c.az)), c.z];
     cfg.azimut = c.az;
     cfg.elevacion = c.el;
   } else if (c.tipo === "doc") {
-    // mástil diagonal a 60 grados con el chorro a lo largo del tubo (diseño del documento)
-  } else if (c.tipo === "lateral") {
-    // la mejor del barrido anterior: a 1 m de la boca, horizontal a lo largo
-    cfg.pos_bomba = [0.65, 1.835, c.z];
-    cfg.azimut = 348.4;
+    // mástil diagonal a 60 grados desde la boca hacia el lado opuesto al pozo, chorro a lo largo del tubo
+    Object.assign(cfg, { angulo_tubo: 60, z_bomba: c.z, azimut: null, elevacion: null });
+  } else if (c.tipo === "tangencial") {
+    cfg.pos_bomba = [...TANGENCIAL.pos, c.z];
+    cfg.azimut = TANGENCIAL.az;
     cfg.elevacion = 0;
   }
   if (c.sin_bomba) c.bomba_min = 0;
@@ -66,7 +72,28 @@ function desde(t, falla) {
   return ultimo < 0 ? 0 : t[ultimo + 1];
 }
 
-function simula(c) {
+// Promedios en el agua: velocidad tangencial (+ antihoraria, vista desde arriba) y rapidez, m/s.
+function giro(sim) {
+  const { nx, ny, nz, dx, dy, u, v, w, agua } = sim;
+  const [cx, cy] = sim.geo.centro;
+  let st = 0, sr = 0, n = 0;
+  for (let i = 0; i < nx; i++) {
+    for (let j = 0; j < ny; j++) {
+      if (!agua[i * ny + j]) continue;
+      const rx = (i + 0.5) * dx - cx, ry = (j + 0.5) * dy - cy, r = Math.hypot(rx, ry);
+      for (let k = 0; k < nz; k++) {
+        const m = (i * ny + j) * nz + k, iv = (i * (ny + 1) + j) * nz + k, iw = (i * ny + j) * (nz + 1) + k;
+        const a = 0.5 * (u[m] + u[m + ny * nz]), b = 0.5 * (v[iv] + v[iv + nz]), e = 0.5 * (w[iw] + w[iw + 1]);
+        if (r > 0) st += (rx * b - ry * a) / r;
+        sr += Math.hypot(a, b, e);
+        n++;
+      }
+    }
+  }
+  return [st / n, sr / n];
+}
+
+export function simula(c) {
   const t0r = performance.now();
   const sim = new Cisterna(c.cfg);
   sim.dosificaCfg();
@@ -76,7 +103,7 @@ function simula(c) {
   const [px, py, pz] = c.cfg.pozo;
   const zFondo = sim.dz / 2;
   const t = [], cov = [], cmin = [], cmax = [];
-  let corto = 0, vfSuma = 0, vfN = 0, prox = 0, sale10 = null, sale45 = null;
+  let corto = 0, vfSuma = 0, giroSuma = 0, rapSuma = 0, nOn = 0, prox = 0, sale10 = null, sale45 = null;
   for (;;) {
     if (sim.t >= prox - 1e-9) {
       const s = sim.stats();
@@ -88,8 +115,11 @@ function simula(c) {
         const pl = sim.planta("vel", zFondo).data;
         let vf = 0;
         for (let q = 0; q < pl.length; q++) vf = Math.max(vf, pl[q]);
+        const [gt, gr] = giro(sim);
         vfSuma += vf;
-        vfN++;
+        giroSuma += gt;
+        rapSuma += gr;
+        nOn++;
       }
       if (sale10 == null && sim.t >= 600 - 1e-9) sale10 = sim.salida_mg / masa;
       if (sale45 == null && sim.t >= 2700 - 1e-9) sale45 = sim.salida_mg / masa;
@@ -111,7 +141,9 @@ function simula(c) {
     t10: desde(t, cmin.map((v, q) => v < 0.9 || cmax[q] > 1.1)),
     cov45: r3(cov[i45]),
     corto: r3(corto),
-    vf_med: vfN ? r3(vfSuma / vfN) : null,
+    vf_med: nOn ? r3(vfSuma / nOn) : null,
+    giro: nOn ? Math.round((giroSuma / nOn) * 1e4) / 1e4 : null,
+    rapidez: nOn ? Math.round((rapSuma / nOn) * 1e4) / 1e4 : null,
     sale10: sale10 == null ? null : r3(sale10),
     sale45: sale45 == null ? null : r3(sale45),
     seg: r3((performance.now() - t0r) / 1000),
@@ -122,10 +154,19 @@ function simula(c) {
 
 const costo = (r) => (r.t95 ?? 90 + 100 * (r.cov45 ?? 1)) + 20 * Math.max(0, r.corto - 1.5);
 
+// Con el llenado entre el pozo y la pared, az y -az son el mismo caso en espejo: cuenta una vez.
 function mejores(hechos, llenado, n) {
+  const vistos = new Set();
   return [...hechos.values()]
     .filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo)
-    .sort((a, b) => costo(a) - costo(b)).slice(0, n);
+    .sort((a, b) => costo(a) - costo(b) || Math.abs(a.az) - Math.abs(b.az) || b.az - a.az)
+    .filter((r) => {
+      const k = llenado === "pared" ? `${Math.abs(r.az)}|${r.el}` : `${r.az}|${r.el}`;
+      if (vistos.has(k)) return false;
+      vistos.add(k);
+      return true;
+    })
+    .slice(0, n);
 }
 
 function plan(hechos) {
@@ -133,7 +174,7 @@ function plan(hechos) {
   const tamizado = [];
   for (const llenado of Object.keys(LLENADOS)) {
     for (const az of AZIMUTS) for (const el of ELEVACIONES) tamizado.push(caso({ tipo: "propuesta", llenado, az, el }));
-    tamizado.push(caso({ tipo: "doc", llenado }), caso({ tipo: "lateral", llenado }));
+    tamizado.push(caso({ tipo: "doc", llenado }), caso({ tipo: "tangencial", llenado }));
   }
   etapas.push(["tamizado (8 direcciones x 3 inclinaciones a 50 cm, y las referencias)", tamizado]);
   const listo = tamizado.every((c) => hechos.has(c.id));
@@ -146,6 +187,7 @@ function plan(hechos) {
     for (const q of [15]) {
       consumo.push(caso({ tipo: "propuesta", llenado, az: m.az, el: m.el, consumo: q }));
       consumo.push(caso({ tipo: "doc", llenado, consumo: q }));
+      consumo.push(caso({ tipo: "tangencial", llenado, consumo: q }));
       consumo.push(caso({ tipo: "propuesta", llenado, az: m.az, el: m.el, consumo: q, sin_bomba: true }));
     }
   }
@@ -208,12 +250,17 @@ if (!isMainThread) {
 // ---- reporte ----
 
 const fmt = (x) => (x == null ? ">90" : x.toFixed(1));
+const cm = (x) => (x == null ? "-" : (100 * x).toFixed(1));
 
 function reporte(hechos) {
   const L = [];
   const todos = [...hechos.values()];
+  const nombres = {
+    lado: `a un lado de la bomba de pozo (${LLENADOS.lado.slice(0, 2).join(", ")})`,
+    pared: `entre la bomba de pozo y la pared (${LLENADOS.pared.slice(0, 2).join(", ")})`,
+  };
   for (const llenado of Object.keys(LLENADOS)) {
-    L.push(`## Llenado ${llenado === "lado" ? "al lado de la bomba de pozo (0.90, 1.25)" : "entre la bomba de pozo y la pared (0.65, 1.00)"}`, "");
+    L.push(`## Llenado ${nombres[llenado]}`, "");
     L.push("t95 en min (CoV < 5 % de ahí en adelante). Entre paréntesis, pico de cloro en la rejilla del pozo en los primeros 10 min / meta.", "");
     L.push(`| azimut | ${ELEVACIONES.map((e) => `el ${e}`).join(" | ")} |`, `|---|${ELEVACIONES.map(() => "---").join("|")}|`);
     for (const az of AZIMUTS) {
@@ -223,22 +270,27 @@ function reporte(hechos) {
       });
       L.push(`| ${az} | ${celdas.join(" | ")} |`);
     }
+    L.push("", "Detalle (t95 / ±10 % en min, pico, rapidez máxima en el fondo, giro medio y rapidez media del agua en cm/s):", "",
+      "| caso | t95 | ±10 % | pico | fondo m/s | giro cm/s | rapidez cm/s |", "|---|---|---|---|---|---|---|");
+    const fila = (nombre, r) => L.push(`| ${nombre} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${r.vf_med} | ${cm(r.giro)} | ${cm(r.rapidez)} |`);
+    const props = todos.filter((r) => r.tipo === "propuesta" && r.llenado === llenado && r.z === 0.5 && !r.consumo)
+      .sort((a, b) => costo(a) - costo(b));
+    for (const r of props.slice(0, 4)) fila(`propuesta az ${r.az} el ${r.el}`, r);
     const ref = (tipo) => hechos.get(caso({ tipo, llenado }).id);
-    const d = ref("doc"), la = ref("lateral");
-    L.push("");
-    if (d) L.push(`Diseño del doc (mástil a 60°, chorro -60°): t95 ${fmt(d.t95)}, ±10 % ${fmt(d.t10)}, pico ${d.corto}, fondo ${d.vf_med} m/s.`);
-    if (la) L.push(`Lateral del barrido anterior (a 1 m de la boca): t95 ${fmt(la.t95)}, ±10 % ${fmt(la.t10)}, pico ${la.corto}, fondo ${la.vf_med} m/s.`);
+    const d = ref("doc"), ta = ref("tangencial");
+    if (d) fila("diseño del doc (mástil a 60°, chorro -60°)", d);
+    if (ta) fila("tangencial junto a la pared", ta);
     const alt = todos.filter((r) => r.tipo === "propuesta" && r.llenado === llenado && !r.consumo && r.z !== 0.5);
     if (alt.length) {
       L.push("", "Alturas (t95 / ±10 %):", "");
       const dirs = [...new Set(alt.map((r) => `${r.az}|${r.el}`))];
       for (const k of dirs) {
         const [az, el] = k.split("|").map(Number);
-        const fila = [0.35, 0.5, 0.65, 0.8].map((z) => {
+        const celdas = [0.35, 0.5, 0.65, 0.8].map((z) => {
           const r = hechos.get(caso({ tipo: "propuesta", llenado, az, el, z }).id);
           return r ? `z ${z}: ${fmt(r.t95)} / ${fmt(r.t10)}` : "";
         });
-        L.push(`- az ${az} el ${el}: ${fila.filter(Boolean).join("; ")}`);
+        L.push(`- az ${az} el ${el}: ${celdas.filter(Boolean).join("; ")}`);
       }
     }
     const con = todos.filter((r) => r.llenado === llenado && r.consumo);
@@ -246,7 +298,8 @@ function reporte(hechos) {
       L.push("", "Con la casa usando 15 L/min desde que se echa el cloro:", "",
         "| caso | t95 | cloro que se fue a la casa en 10 min | en 45 min |", "|---|---|---|---|");
       for (const r of con) {
-        const nombre = r.tipo === "doc" ? "diseño del doc" : r.sin_bomba ? "sin bomba de mezcla" : `propuesta az ${r.az} el ${r.el}`;
+        const nombre = r.tipo === "doc" ? "diseño del doc" : r.tipo === "tangencial" ? "tangencial junto a la pared"
+          : r.sin_bomba ? "sin bomba de mezcla" : `propuesta az ${r.az} el ${r.el}`;
         L.push(`| ${nombre} | ${fmt(r.t95)} | ${(100 * r.sale10).toFixed(1)} % | ${(100 * r.sale45).toFixed(1)} % |`);
       }
     }
