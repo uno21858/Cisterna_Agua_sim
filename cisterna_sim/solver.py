@@ -374,10 +374,10 @@ class Cisterna:
                     self._avisado_cg = True
                 break
             z = self._precondiciona(r)
-            rz, rz_ant = float(xp.vdot(r, z)), rz
+            rz, rz_ant = float((r * z).sum()), rz
             d = z if d is None else z + (rz / rz_ant) * d
             ad = self._lap_agua(d)
-            alfa = rz / -float(xp.vdot(d, ad))
+            alfa = rz / -float((d * ad).sum())
             p += alfa * d
             r += alfa * ad
             it += 1
