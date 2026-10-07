@@ -17,13 +17,13 @@ Detalle (t95 y ±10 % en min; pico en la rejilla; minuto desde el cual la rejill
 
 | caso | t95 | ±10 % | pico | rejilla < 2 veces | rejilla < 1.1 veces | fondo m/s | giro cm/s | rapidez cm/s |
 |---|---|---|---|---|---|---|---|---|
-| propuesta az -45 el -15 | 13.7 | 15.2 | 3.92 | 3.5 | 6.167 | 0.01 | 0.0 | 0.5 |
-| propuesta az -45 el 0 | 14.3 | 15.7 | 3.73 | 3.167 | 5.667 | 0.007 | 0.0 | 0.5 |
-| propuesta az -45 el 15 | 15.3 | 18.2 | 3.40 | 2.833 | 4.5 | 0.005 | 0.0 | 0.5 |
-| propuesta az 0 el 0 | 16.3 | 18.8 | 4.05 | 3.667 | 7.167 | 0.013 | 0.0 | 0.6 |
-| propuesta az 180 el 15 (el menor pico) | 20.2 | 23.0 | 1.02 | 0 | 0 | 0.007 | 0.0 | 0.6 |
-| diseño del doc (mástil a 60°, chorro -60°) | 22.8 | 23.3 | 3.42 | 5.167 | 11.5 | 0.051 | 0.0 | 0.3 |
-| tangencial junto a la pared | 15.8 | 17.3 | 3.74 | 3.5 | 4.667 | 0.012 | 0.5 | 0.6 |
+| propuesta az -45 el -15 | 13.7 | 15.2 | 3.92 | 3.5 | 6.2 | 0.01 | 0.00 | 0.50 |
+| propuesta az -45 el 0 | 14.3 | 15.7 | 3.73 | 3.2 | 5.7 | 0.007 | 0.00 | 0.55 |
+| propuesta az -45 el 15 | 15.3 | 18.2 | 3.40 | 2.8 | 4.5 | 0.005 | 0.00 | 0.55 |
+| propuesta az 0 el 0 | 16.3 | 18.8 | 4.05 | 3.7 | 7.2 | 0.013 | 0.00 | 0.58 |
+| propuesta az 180 el 15 (el menor pico) | 20.2 | 23.0 | 1.02 | 0.0 | 0.0 | 0.007 | 0.00 | 0.60 |
+| diseño del doc (mástil a 60°, chorro -60°) | 22.8 | 23.3 | 3.42 | 5.2 | 11.5 | 0.051 | 0.00 | 0.29 |
+| tangencial junto a la pared | 15.8 | 17.3 | 3.74 | 3.5 | 4.7 | 0.012 | 0.47 | 0.62 |
 
 Alturas (t95 / ±10 %):
 
@@ -79,13 +79,13 @@ Detalle (t95 y ±10 % en min; pico en la rejilla; minuto desde el cual la rejill
 
 | caso | t95 | ±10 % | pico | rejilla < 2 veces | rejilla < 1.1 veces | fondo m/s | giro cm/s | rapidez cm/s |
 |---|---|---|---|---|---|---|---|---|
-| propuesta az 0 el 15 | 11.0 | 12.5 | 4.53 | 3.833 | 6.667 | 0.007 | 0.0 | 0.6 |
-| propuesta az 0 el 0 | 14.7 | 17.3 | 4.90 | 4.333 | 9.667 | 0.013 | 0.0 | 0.6 |
-| propuesta az 0 el -15 | 15.8 | 18.8 | 5.07 |  |  | 0.016 | 0.0 | 0.5 |
-| propuesta az -45 el 15 | 16.2 | 18.7 | 4.55 |  |  | 0.005 | 0.0 | 0.5 |
-| propuesta az 180 el 15 (el menor pico) | 20.0 | 22.8 | 0.98 | 0 | 0 | 0.007 | 0.0 | 0.6 |
-| diseño del doc (mástil a 60°, chorro -60°) | 29.2 | 30.2 | 3.62 | 5.667 | 16.5 | 0.051 | 0.0 | 0.3 |
-| tangencial junto a la pared | 18.2 | 20.3 | 3.09 | 3 | 4.333 | 0.012 | 0.5 | 0.6 |
+| propuesta az 0 el 15 | 11.0 | 12.5 | 4.53 | 3.8 | 6.7 | 0.007 | 0.00 | 0.60 |
+| propuesta az 0 el 0 | 14.7 | 17.3 | 4.90 | 4.3 | 9.7 | 0.013 | 0.00 | 0.58 |
+| propuesta az 0 el -15 | 15.8 | 18.8 | 5.07 |  |  | 0.016 | 0.00 | 0.55 |
+| propuesta az -45 el 15 | 16.2 | 18.7 | 4.55 |  |  | 0.005 | 0.00 | 0.55 |
+| propuesta az 180 el 15 (el menor pico) | 20.0 | 22.8 | 0.98 | 0.0 | 0.0 | 0.007 | 0.00 | 0.60 |
+| diseño del doc (mástil a 60°, chorro -60°) | 29.2 | 30.2 | 3.62 | 5.7 | 16.5 | 0.051 | 0.00 | 0.29 |
+| tangencial junto a la pared | 18.2 | 20.3 | 3.09 | 3.0 | 4.3 | 0.012 | 0.47 | 0.62 |
 
 Alturas (t95 / ±10 %):
 

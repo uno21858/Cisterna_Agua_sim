@@ -294,7 +294,8 @@ if (!isMainThread) {
 // ---- reporte ----
 
 const fmt = (x) => (x == null ? ">90" : x.toFixed(1));
-const cm = (x) => (x == null ? "-" : (100 * x).toFixed(1));
+const cm = (x) => (x == null ? "-" : (100 * x).toFixed(2));
+const min1 = (x) => (x == null ? "" : x.toFixed(1));
 
 function reporte(hechos) {
   const L = [];
@@ -317,7 +318,7 @@ function reporte(hechos) {
     L.push("", "Detalle (t95 y ±10 % en min; pico en la rejilla; minuto desde el cual la rejilla queda abajo de 2 y de 1.1 veces la meta; rapidez máxima en el fondo; giro medio y rapidez media del agua en cm/s):", "",
       "| caso | t95 | ±10 % | pico | rejilla < 2 veces | rejilla < 1.1 veces | fondo m/s | giro cm/s | rapidez cm/s |",
       "|---|---|---|---|---|---|---|---|---|");
-    const fila = (nombre, r) => L.push(`| ${nombre} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${r.rejilla2 ?? ""} | ${r.rejilla11 ?? ""} | ${r.vf_med} | ${cm(r.giro)} | ${cm(r.rapidez)} |`);
+    const fila = (nombre, r) => L.push(`| ${nombre} | ${fmt(r.t95)} | ${fmt(r.t10)} | ${r.corto.toFixed(2)} | ${min1(r.rejilla2)} | ${min1(r.rejilla11)} | ${r.vf_med} | ${cm(r.giro)} | ${cm(r.rapidez)} |`);
     const props = tamiz(hechos, llenado).sort((a, b) => costo(a) - costo(b));
     for (const r of props.slice(0, 4)) fila(`propuesta az ${r.az} el ${r.el}`, r);
     const b = menosPico(hechos, llenado);
