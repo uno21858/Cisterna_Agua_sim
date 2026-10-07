@@ -72,9 +72,11 @@ def graficar_mezcla(serie, resumen, ruta):
     plt.close(fig)
 
 
-def _marca(ax, x, y, texto, color=TINTA):
+def _marca(ax, x, y, texto, color=TINTA, izquierda=False):
+    """Punto con rótulo; izquierda=True lo pone del otro lado para que no choque con un vecino."""
     ax.plot(x, y, "o", ms=8, mfc=color, mec=FONDO, mew=2, zorder=5)
-    ax.annotate(texto, (x, y), xytext=(6, 6), textcoords="offset points", fontsize=8, color=TINTA)
+    ax.annotate(texto, (x, y), xytext=(-6, -10) if izquierda else (6, 6), textcoords="offset points",
+                fontsize=8, color=TINTA, ha="right" if izquierda else "left")
 
 
 def _planta(sim, a):
@@ -141,7 +143,7 @@ def graficar_flujo(sim, ruta):
     ax2.annotate("", (bx + 0.5 * d[0] / np.hypot(d[0], d[1]), by + 0.5 * d[1] / np.hypot(d[0], d[1])), (bx, by),
                  arrowprops=dict(arrowstyle="-|>", color=SERIES[1], lw=2))
     _marca(ax2, bx, by, "bomba de mezcla", SERIES[1])
-    _marca(ax2, cfg.pozo[0], cfg.pozo[1], "bomba de pozo", TINTA_2)
+    _marca(ax2, cfg.pozo[0], cfg.pozo[1], "bomba de pozo", TINTA_2, izquierda=cfg.pozo[0] <= bx)
     _marca(ax2, cfg.punto_dosis()[0], cfg.punto_dosis()[1], "dosis", SERIES[0])
     _ejes_planta(ax2, sim)
     ax2.set_title(f"Planta a {(k + 0.5) * sim.dz:.2f} m (altura de la rejilla del pozo)", loc="left")
@@ -172,7 +174,7 @@ def animar(sim, cuadros, ruta, fps=6):
     _marca(ax1, 0, cfg.pos_bomba_xyz()[2], "bomba", SERIES[1])
     bx, by, bz = cfg.pos_bomba_xyz()
     _marca(ax2, bx, by, "bomba", SERIES[1])
-    _marca(ax2, cfg.pozo[0], cfg.pozo[1], "pozo", TINTA_2)
+    _marca(ax2, cfg.pozo[0], cfg.pozo[1], "pozo", TINTA_2, izquierda=cfg.pozo[0] <= bx)
     fig.colorbar(im2, ax=[ax1, ax2], label=f"cloro (mg/L); mezcla perfecta = {sim.c_final:.2f}", shrink=0.9,
                  pad=0.01)
     titulo = fig.suptitle(" ", x=0.01, ha="left", fontsize=12)
