@@ -188,6 +188,22 @@ def test_correr_usa_solo_el_agua():
     assert sim.masa_cloro_mg() == pytest.approx(masa, rel=1e-10)
 
 
+def test_con_la_caja_llena_da_la_proyeccion_de_la_dct():
+    sim = Cisterna(_cfg())
+    sim._fija_mascara(np.ones((sim.nx, sim.ny), dtype=bool))
+    sim.tol_cg = 1e-14
+    rng = np.random.default_rng(3)
+    campos = [rng.standard_normal(a.shape) * m for a, m in zip((sim.u, sim.v, sim.w), sim.abierta)]
+    gc = [a.copy() for a in campos]
+    sim._proyecta(*gc, 0.5)
+    assert sim.iter_cg == 1  # con la caja llena el precondicionador es la inversa exacta
+    sim.redonda = False
+    dct = [a.copy() for a in campos]
+    sim._proyecta(*dct, 0.5)
+    for a, b in zip(gc, dct):
+        assert np.abs(a - b).max() < 1e-14 * np.abs(b).max()
+
+
 def test_tolerancia_estricta_para_la_paridad():
     sim = Cisterna(_cfg())
     sim.tol_cg = 1e-12

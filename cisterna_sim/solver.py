@@ -239,16 +239,19 @@ class Cisterna:
 
     def _mascaras(self):
         """Celdas de agua y caras abiertas (en la rectangular, todas las interiores)."""
-        cfg, xp, dt = self.cfg, self.xp, self.dtype
-        nx, ny, nz = self.nx, self.ny, self.nz
+        cfg, nx, ny = self.cfg, self.nx, self.ny
         if self.redonda:
             cx, cy, r = cfg.largo / 2, cfg.ancho / 2, cfg.diametro / 2
             xc = (np.arange(nx) + 0.5) * self.dx
             yc = (np.arange(ny) + 0.5) * self.dy
-            col = (xc[:, None] - cx) ** 2 + (yc[None, :] - cy) ** 2 <= r**2
+            self._fija_mascara((xc[:, None] - cx) ** 2 + (yc[None, :] - cy) ** 2 <= r**2)
         else:
-            col = np.ones((nx, ny), dtype=bool)
-        agua = np.repeat(col[:, :, None], nz, axis=2)
+            self._fija_mascara(np.ones((nx, ny), dtype=bool))
+
+    def _fija_mascara(self, col):
+        """col: columnas de agua (nx, ny), en numpy."""
+        xp, dt = self.xp, self.dtype
+        agua = np.repeat(col[:, :, None], self.nz, axis=2)
         abiertas = []
         for eje in range(3):
             shape = list(agua.shape)
