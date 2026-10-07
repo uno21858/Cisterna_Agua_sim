@@ -25,6 +25,7 @@ function cerca(a, b, rel, msg) {
 
 function correCaso(caso) {
   const sim = new Cisterna(caso.cfg);
+  if (caso.tol_presion != null) sim.tolPresion = caso.tol_presion;
   sim.dosificaCfg();
   for (let paso = 0; paso < caso.pasos; paso++) {
     sim.avanza(caso.dt, { bomba: caso.apaga_en === null || paso < caso.apaga_en });
@@ -38,6 +39,14 @@ for (const [nombre, caso] of Object.entries(REF.casos)) {
   test(`campos finales iguales a Python: ${nombre}`, () => {
     const sim = correCaso(caso);
     assert.deepEqual([sim.nx, sim.ny, sim.nz], caso.malla);
+    assert.equal(sim.redonda, caso.cfg.forma === "redonda");
+    if (sim.redonda) {
+      assert.equal(sim.nAgua, caso.n_agua);
+      assert.ok(sim.presion.residuo <= caso.tol_presion, `residuo de la presión ${sim.presion.residuo}`);
+      // mismo criterio de paro: el total de iteraciones del gradiente conjugado casi igual al de Python
+      const itPy = caso.iteraciones_presion.reduce((a, b) => a + b, 0);
+      assert.ok(Math.abs(sim.presion.total - itPy) <= 0.02 * itPy, `iteraciones js ${sim.presion.total} py ${itPy}`);
+    }
     for (const campo of ["u", "v", "w", "c"]) {
       const e = errorRel(sim[campo], caso[campo]);
       errores[`${nombre}.${campo}`] = e;
@@ -87,8 +96,10 @@ test("puntoOperacion igual a Python", () => {
   }
 });
 
-test("validar rechaza lo mismo que Python", () => {
+test("validar rechaza y acepta lo mismo que Python", () => {
+  assert.ok(REF.invalidos.some((kw) => kw.forma === "redonda") && REF.validos.some((kw) => kw.forma === "redonda"));
   for (const kw of REF.invalidos) assert.throws(() => validar(kw), Error, JSON.stringify(kw));
+  for (const kw of REF.validos) validar(kw);
   for (const caso of Object.values(REF.casos)) validar(caso.cfg);
   for (const g of REF.geometrias) validar(g.cfg);
 });
